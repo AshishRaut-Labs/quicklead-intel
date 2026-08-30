@@ -18,7 +18,8 @@ export default function QuickLeadDashboard() {
     setData(null);
 
     try {
-      const response = await fetch(`http://localhost:8000/api/scan?url=${encodeURIComponent(url)}`);
+      // Updated to point to your live Render backend
+      const response = await fetch(`https://quicklead-intel.onrender.com/api/scan?url=${encodeURIComponent(url)}`);
       if (!response.ok) throw new Error("Failed to scan the target URL.");
       
       const result = await response.json();
