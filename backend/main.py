@@ -1,6 +1,6 @@
 import re
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
 
@@ -48,7 +48,6 @@ def detect_tech_stack(html: str) -> dict:
         or "/_next/static/" in html_lower
     )
 
-    # Scoped specifically to avoid false positives with generic CSS classes
     google_analytics = (
         "google-analytics.com/analytics.js" in html_lower
         or "googletagmanager.com/gtag/js" in html_lower
@@ -80,14 +79,12 @@ def detect_trackers(html: str) -> dict:
 def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict]:
     phones = []
     
-    # Check explicit tel: links first
     for a in soup.find_all("a", href=True):
         if a["href"].startswith("tel:"):
             raw_tel = a["href"].replace("tel:", "").strip()
             if raw_tel not in phones:
                 phones.append(raw_tel)
 
-    # Search raw HTML for phone patterns
     raw_phones = PHONE_REGEX.findall(html_content)
     for p in raw_phones:
         cleaned = p.strip()
@@ -140,10 +137,8 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     html_content = response.text
     soup = BeautifulSoup(html_content, "html.parser")
 
-    # Title extraction
     title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
 
-    # Comprehensive Meta Description search (Standard + OpenGraph)
     meta_desc = ""
     meta_tag = (
         soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
@@ -152,12 +147,10 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     if meta_tag and meta_tag.get("content"):
         meta_desc = meta_tag["content"].strip()
 
-    # OpenGraph & SEO Headings
     h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all("h1") if h1.get_text(strip=True)]
     og_image_tag = soup.find("meta", attrs={"property": "og:image"})
     og_image = og_image_tag["content"] if (og_image_tag and og_image_tag.get("content")) else None
 
-    # Emails extraction
     raw_emails = EMAIL_REGEX.findall(html_content)
     emails = list({e for e in raw_emails if not e.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'))})
 
@@ -176,6 +169,57 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
         "tech_stack": tech_stack,
         "trackers": trackers,
     }
+
+
+@app.post("/api/bulk-scan")
+async def bulk_scan_targets(urls: list[str] = Body(..., description="List of URLs to scan in bulk")):
+    """
+    Asynchronously scan multiple URLs and return aggregated intelligence reports for CSV export.
+    """
+    results = []
+    
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        for raw_url in urls[:50]:  # Cap at 50 URLs per request
+            target_url = raw_url.strip()
+            if not target_url:
+                continue
+            if not target_url.startswith(("http://", "https://")):
+                target_url = f"https://{target_url}"
+                
+            try:
+                response = await client.get(target_url, headers=HEADERS)
+                html_content = response.text
+                soup = BeautifulSoup(html_content, "html.parser")
+                
+                title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
+                meta_tag = (
+                    soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+                    or soup.find("meta", attrs={"property": re.compile(r"^og:description$", re.I)})
+                )
+                meta_desc = meta_tag["content"].strip() if (meta_tag and meta_tag.get("content")) else ""
+                
+                phones, socials = extract_contacts(html_content, soup)
+                tech_stack = detect_tech_stack(html_content)
+                trackers = detect_trackers(html_content)
+                
+                results.append({
+                    "url": target_url,
+                    "status": "Success",
+                    "title": title,
+                    "meta_description": meta_desc,
+                    "phones": phones[:2],
+                    "socials": socials,
+                    "tech_stack": tech_stack,
+                    "trackers": trackers
+                })
+            except Exception as e:
+                results.append({
+                    "url": target_url,
+                    "status": "Failed",
+                    "error": str(e)
+                })
+                
+    return {"results": results}
 
 
 if __name__ == "__main__":
