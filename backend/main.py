@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 
 app = FastAPI(title="Tech Stack Scanner API")
 
-# Allow requests from localhost and deployed production frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,42 +14,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Custom User-Agent to mimic a standard browser request
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
 }
 
-EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-PHONE_REGEX = re.compile(r"(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
+EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+PHONE_REGEX = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 
 
 def detect_tech_stack(html: str) -> dict:
-    """
-    Detect presence of common tech stacks based on HTML content.
-    Returns a dictionary with boolean flags.
-    """
     html_lower = html.lower()
 
-    # WordPress: check wp paths and generator meta tag
     wordpress = (
         "wp-content" in html_lower
         or "wp-includes" in html_lower
         or 'name="generator" content="wordpress' in html_lower
     )
 
-    # Shopify: check CDN and theme markers
-    shopify = "cdn.shopify.com" in html_lower or "shopify.theme" in html_lower
+    shopify = (
+        "cdn.shopify.com" in html_lower 
+        or "shopify.theme" in html_lower 
+        or "myshopify.com" in html_lower
+    )
 
-    # Next.js: check runtime data markers
-    nextjs = "__next_data__" in html_lower or 'id="__next"' in html_lower
+    nextjs = (
+        "__next_data__" in html_lower 
+        or 'id="__next"' in html_lower
+        or "/_next/static/" in html_lower
+    )
 
-    # Google Analytics: check common scripts and ID patterns
+    # Scoped specifically to avoid false positives with generic CSS classes
     google_analytics = (
         "google-analytics.com/analytics.js" in html_lower
         or "googletagmanager.com/gtag/js" in html_lower
         or "gtag(" in html_lower
-        or "ua-" in html_lower
-        or "g-" in html_lower
+        or bool(re.search(r"ua-\d+-\d+", html_lower))
+        or bool(re.search(r"g-[a-z0-9]{8,}", html_lower))
     )
 
     return {
@@ -62,62 +66,65 @@ def detect_tech_stack(html: str) -> dict:
 
 
 def detect_trackers(html: str) -> dict:
-    """
-    Detect presence of marketing pixels and tracking scripts based on HTML content.
-    """
     html_lower = html.lower()
 
     return {
         "facebook_pixel": "fbevents.js" in html_lower or "fbq(" in html_lower,
         "google_tag_manager": "googletagmanager.com/gtm.js" in html_lower or "gtm(" in html_lower,
-        "tiktok_pixel": "analytics.tiktok.com" in html_lower or "ttq" in html_lower,
-        "hubspot": "js.hsscripts.com" in html_lower or "hubspot" in html_lower,
-        "klaviyo": "klaviyo.com/onsite" in html_lower or "_learnq" in html_lower
+        "tiktok_pixel": "analytics.tiktok.com" in html_lower or "ttq." in html_lower,
+        "hubspot": "js.hs-scripts.com" in html_lower or "js.hsscripts.com" in html_lower or "_hsq" in html_lower,
+        "klaviyo": "klaviyo.com/onsite" in html_lower or "_learnq" in html_lower,
     }
 
 
 def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict]:
-    """
-    Extract phone numbers and social media links from the HTML page content and soup.
-    """
-    raw_phones = PHONE_REGEX.findall(html_content)
     phones = []
+    
+    # Check explicit tel: links first
+    for a in soup.find_all("a", href=True):
+        if a["href"].startswith("tel:"):
+            raw_tel = a["href"].replace("tel:", "").strip()
+            if raw_tel not in phones:
+                phones.append(raw_tel)
+
+    # Search raw HTML for phone patterns
+    raw_phones = PHONE_REGEX.findall(html_content)
     for p in raw_phones:
-        matched_str = p[0] if isinstance(p, tuple) else p
-        if len(matched_str.strip()) >= 7 and matched_str not in phones:
-            phones.append(matched_str.strip())
+        cleaned = p.strip()
+        if len(re.sub(r"\D", "", cleaned)) >= 10 and cleaned not in phones:
+            phones.append(cleaned)
 
     socials = {
         "linkedin": None,
         "twitter": None,
         "instagram": None,
-        "facebook": None
+        "facebook": None,
     }
 
     for a in soup.find_all("a", href=True):
-        href = a["href"].lower()
-        if "linkedin.com" in href and not socials["linkedin"]:
-            socials["linkedin"] = a["href"]
-        elif ("twitter.com" in href or "x.com" in href) and not socials["twitter"]:
-            socials["twitter"] = a["href"]
-        elif "instagram.com" in href and not socials["instagram"]:
-            socials["instagram"] = a["href"]
-        elif "facebook.com" in href and not socials["facebook"]:
-            socials["facebook"] = a["href"]
+        href = a["href"]
+        href_lower = href.lower()
+        if "linkedin.com/company" in href_lower or "linkedin.com/in" in href_lower:
+            if not socials["linkedin"]:
+                socials["linkedin"] = href
+        elif ("twitter.com/" in href_lower or "x.com/" in href_lower) and not socials["twitter"]:
+            if "status" not in href_lower:
+                socials["twitter"] = href
+        elif "instagram.com/" in href_lower and not socials["instagram"]:
+            socials["instagram"] = href
+        elif "facebook.com/" in href_lower and not socials["facebook"]:
+            socials["facebook"] = href
 
-    return phones, socials
+    return phones[:5], socials
 
 
 @app.get("/api/scan")
 async def scan_target(url: str = Query(..., description="Target URL to scan")):
-    """
-    Scan a target URL and extract metadata, emails, phones, social links, trackers, and tech stack.
-    """
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
             response = await client.get(url, headers=HEADERS)
             response.raise_for_status()
     except httpx.HTTPStatusError as e:
@@ -133,14 +140,27 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     html_content = response.text
     soup = BeautifulSoup(html_content, "html.parser")
 
-    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    # Title extraction
+    title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
 
+    # Comprehensive Meta Description search (Standard + OpenGraph)
     meta_desc = ""
-    meta_tag = soup.find("meta", attrs={"name": "description"})
+    meta_tag = (
+        soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+        or soup.find("meta", attrs={"property": re.compile(r"^og:description$", re.I)})
+    )
     if meta_tag and meta_tag.get("content"):
         meta_desc = meta_tag["content"].strip()
 
-    emails = list(set(EMAIL_REGEX.findall(html_content)))
+    # OpenGraph & SEO Headings
+    h1_tags = [h1.get_text(strip=True) for h1 in soup.find_all("h1") if h1.get_text(strip=True)]
+    og_image_tag = soup.find("meta", attrs={"property": "og:image"})
+    og_image = og_image_tag["content"] if (og_image_tag and og_image_tag.get("content")) else None
+
+    # Emails extraction
+    raw_emails = EMAIL_REGEX.findall(html_content)
+    emails = list({e for e in raw_emails if not e.endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'))})
+
     phones, socials = extract_contacts(html_content, soup)
     tech_stack = detect_tech_stack(html_content)
     trackers = detect_trackers(html_content)
@@ -148,7 +168,9 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     return {
         "title": title,
         "meta_description": meta_desc,
-        "emails": emails,
+        "h1_tags": h1_tags[:3],
+        "og_image": og_image,
+        "emails": emails[:5],
         "phones": phones,
         "socials": socials,
         "tech_stack": tech_stack,
