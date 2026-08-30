@@ -43,6 +43,11 @@ export default function QuickLeadDashboard() {
       ["Twitter/X", `"${data.socials?.twitter || "None"}"`],
       ["Instagram", `"${data.socials?.instagram || "None"}"`],
       ["Facebook", `"${data.socials?.facebook || "None"}"`],
+      ["Facebook Pixel", data.trackers?.facebook_pixel ? "Yes" : "No"],
+      ["Google Tag Manager", data.trackers?.google_tag_manager ? "Yes" : "No"],
+      ["TikTok Pixel", data.trackers?.tiktok_pixel ? "Yes" : "No"],
+      ["HubSpot", data.trackers?.hubspot ? "Yes" : "No"],
+      ["Klaviyo", data.trackers?.klaviyo ? "Yes" : "No"],
       ["WordPress", data.tech_stack.wordpress ? "Yes" : "No"],
       ["Shopify", data.tech_stack.shopify ? "Yes" : "No"],
       ["Next.js", data.tech_stack.nextjs ? "Yes" : "No"],
@@ -210,8 +215,24 @@ export default function QuickLeadDashboard() {
                 </div>
               </div>
 
-              {/* Site Performance */}
+              {/* Ad Pixels & Trackers */}
               <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-6">
+                <div className="flex items-center gap-2 text-neutral-400 mb-4">
+                  <Globe className="w-5 h-5 text-yellow-400" />
+                  <h3 className="font-medium text-neutral-200">Ad Pixels & Trackers</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {data.trackers && Object.entries(data.trackers).map(([tracker, isPresent]: any) => (
+                    <div key={tracker} className="flex items-center justify-between bg-neutral-950 border border-neutral-800 px-3 py-2 rounded">
+                      <span className="text-sm capitalize text-neutral-300">{tracker.replace('_', ' ')}</span>
+                      <span className={`w-2 h-2 rounded-full ${isPresent ? 'bg-green-500' : 'bg-neutral-700'}`}></span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Site Performance */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-6 md:col-span-2">
                 <div className="flex items-center gap-2 text-neutral-400 mb-4">
                   <Activity className="w-5 h-5 text-blue-400" />
                   <h3 className="font-medium text-neutral-200">Status & Performance</h3>
