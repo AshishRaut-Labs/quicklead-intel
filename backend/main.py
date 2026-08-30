@@ -6,16 +6,16 @@ from bs4 import BeautifulSoup
 
 app = FastAPI(title="Tech Stack Scanner API")
 
-# CORS configuration for localhost:3000
+# Allow requests from localhost and deployed production frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Custom User-Agent to mimic a real browser
+# Custom User-Agent to mimic a standard browser request
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -30,26 +30,26 @@ def detect_tech_stack(html: str) -> dict:
     """
     html_lower = html.lower()
 
-    # WordPress: look for typical wp-content, wp-includes or generator meta
+    # WordPress: check wp paths and generator meta tag
     wordpress = (
         "wp-content" in html_lower
         or "wp-includes" in html_lower
         or 'name="generator" content="wordpress' in html_lower
     )
 
-    # Shopify: look for Shopify CDN or theme objects
+    # Shopify: check CDN and theme markers
     shopify = "cdn.shopify.com" in html_lower or "shopify.theme" in html_lower
 
-    # Next.js: look for __NEXT_DATA__ script tag or id="__next"
+    # Next.js: check runtime data markers
     nextjs = "__next_data__" in html_lower or 'id="__next"' in html_lower
 
-    # Google Analytics: look for analytics.js, gtag.js, gtag(, or typical tracking IDs
+    # Google Analytics: check common scripts and ID patterns
     google_analytics = (
         "google-analytics.com/analytics.js" in html_lower
         or "googletagmanager.com/gtag/js" in html_lower
         or "gtag(" in html_lower
         or "ua-" in html_lower
-        or "g-" in html_lower  # GA4 measurement IDs start with G-
+        or "g-" in html_lower
     )
 
     return {
@@ -63,9 +63,8 @@ def detect_tech_stack(html: str) -> dict:
 @app.get("/api/scan")
 async def scan_target(url: str = Query(..., description="Target URL to scan")):
     """
-    Scan a target URL and extract metadata, emails and tech stack.
+    Scan a target URL and extract metadata, emails, and tech stack.
     """
-    # Basic URL validation (ensure it has a scheme)
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
 
@@ -74,15 +73,16 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
             response = await client.get(url, headers=HEADERS)
             response.raise_for_status()
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"HTTP error: {e.response.status_code}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"HTTP error: {e.response.status_code}",
+        )
     except httpx.RequestError as e:
         raise HTTPException(status_code=500, detail=f"Request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
     html_content = response.text
-
-    # Parse HTML with BeautifulSoup
     soup = BeautifulSoup(html_content, "html.parser")
 
     # Extract title
@@ -94,7 +94,7 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     if meta_tag and meta_tag.get("content"):
         meta_desc = meta_tag["content"].strip()
 
-    # Extract email addresses using regex
+    # Extract email addresses
     emails = list(set(EMAIL_REGEX.findall(html_content)))
 
     # Detect tech stack
