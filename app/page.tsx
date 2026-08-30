@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Search, Download, Globe, Code, FileText, Mail, Activity, Loader2 } from "lucide-react";
+import { Search, Download, Globe, Code, FileText, Mail, Phone, Share2, Activity, Loader2 } from "lucide-react";
 
 export default function QuickLeadDashboard() {
   const [url, setUrl] = useState("");
@@ -18,7 +18,6 @@ export default function QuickLeadDashboard() {
     setData(null);
 
     try {
-      // Updated to point to your live Render backend
       const response = await fetch(`https://quicklead-intel.onrender.com/api/scan?url=${encodeURIComponent(url)}`);
       if (!response.ok) throw new Error("Failed to scan the target URL.");
       
@@ -36,9 +35,14 @@ export default function QuickLeadDashboard() {
     
     const csvRows = [
       ["Metric", "Value"],
-      ["Title", `"${data.title}"`],
-      ["Meta Description", `"${data.meta_description}"`],
-      ["Emails", `"${data.emails.join(", ")}"`],
+      ["Title", `"${data.title || ""}"`],
+      ["Meta Description", `"${data.meta_description || ""}"`],
+      ["Emails", `"${(data.emails || []).join(", ")}"`],
+      ["Phones", `"${(data.phones || []).join(", ")}"`],
+      ["LinkedIn", `"${data.socials?.linkedin || "None"}"`],
+      ["Twitter/X", `"${data.socials?.twitter || "None"}"`],
+      ["Instagram", `"${data.socials?.instagram || "None"}"`],
+      ["Facebook", `"${data.socials?.facebook || "None"}"`],
       ["WordPress", data.tech_stack.wordpress ? "Yes" : "No"],
       ["Shopify", data.tech_stack.shopify ? "Yes" : "No"],
       ["Next.js", data.tech_stack.nextjs ? "Yes" : "No"],
@@ -127,23 +131,67 @@ export default function QuickLeadDashboard() {
                 </div>
               </div>
 
-              {/* Extracted Contacts */}
-              <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-6">
-                <div className="flex items-center gap-2 text-neutral-400 mb-4">
+              {/* Extracted Contacts & Socials */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-6 space-y-4">
+                <div className="flex items-center gap-2 text-neutral-400 mb-2">
                   <Mail className="w-5 h-5 text-purple-400" />
-                  <h3 className="font-medium text-neutral-200">Extracted Contacts</h3>
+                  <h3 className="font-medium text-neutral-200">Extracted Contacts & Socials</h3>
                 </div>
-                {data.emails && data.emails.length > 0 ? (
-                  <ul className="space-y-2">
-                    {data.emails.map((email: string, i: number) => (
-                      <li key={i} className="text-sm bg-neutral-950 border border-neutral-800 px-3 py-2 rounded flex items-center gap-2">
-                        <Mail className="w-3 h-3 text-neutral-500" /> {email}
-                      </li>
+
+                {/* Emails */}
+                <div>
+                  <p className="text-xs text-neutral-500 uppercase tracking-wider mb-1">Emails</p>
+                  {data.emails && data.emails.length > 0 ? (
+                    <ul className="space-y-1">
+                      {data.emails.map((email: string, i: number) => (
+                        <li key={i} className="text-xs bg-neutral-950 border border-neutral-800 px-2 py-1 rounded flex items-center gap-2 text-neutral-300">
+                          <Mail className="w-3 h-3 text-purple-400" /> {email}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral-500 italic">No emails detected</p>
+                  )}
+                </div>
+
+                {/* Phones */}
+                <div>
+                  <p className="text-xs text-neutral-500 uppercase tracking-wider mb-1">Phone Numbers</p>
+                  {data.phones && data.phones.length > 0 ? (
+                    <ul className="space-y-1">
+                      {data.phones.map((phone: string, i: number) => (
+                        <li key={i} className="text-xs bg-neutral-950 border border-neutral-800 px-2 py-1 rounded flex items-center gap-2 text-neutral-300">
+                          <Phone className="w-3 h-3 text-blue-400" /> {phone}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral-500 italic">No phone numbers detected</p>
+                  )}
+                </div>
+
+                {/* Social Links */}
+                <div>
+                  <p className="text-xs text-neutral-500 uppercase tracking-wider mb-1">Social Profiles</p>
+                  <div className="flex flex-wrap gap-2">
+                    {data.socials && Object.entries(data.socials).map(([platform, link]: any) => (
+                      link ? (
+                        <a 
+                          key={platform} 
+                          href={link} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-xs bg-neutral-950 border border-neutral-800 hover:border-neutral-600 px-2.5 py-1 rounded capitalize text-blue-400 transition-colors flex items-center gap-1.5"
+                        >
+                          <Share2 className="w-3 h-3 text-neutral-400" /> {platform}
+                        </a>
+                      ) : null
                     ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-neutral-500 italic">No email addresses detected on the homepage.</p>
-                )}
+                    {(!data.socials || Object.values(data.socials).every(val => !val)) && (
+                      <p className="text-xs text-neutral-500 italic">No social links detected</p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Detected Tech Stack */}

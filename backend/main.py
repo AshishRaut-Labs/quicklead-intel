@@ -21,6 +21,7 @@ HEADERS = {
 }
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+PHONE_REGEX = re.compile(r"(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 
 
 def detect_tech_stack(html: str) -> dict:
@@ -60,10 +61,45 @@ def detect_tech_stack(html: str) -> dict:
     }
 
 
+def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict]:
+    """
+    Extract phone numbers and social media links from the HTML page content and soup.
+    """
+    # Extract phone numbers
+    raw_phones = PHONE_REGEX.findall(html_content)
+    phones = []
+    for p in raw_phones:
+        # If regex returns tuples due to groups, pick the matched string or join them
+        matched_str = p[0] if isinstance(p, tuple) else p
+        if len(matched_str.strip()) >= 7 and matched_str not in phones:
+            phones.append(matched_str.strip())
+
+    # Extract social media links
+    socials = {
+        "linkedin": None,
+        "twitter": None,
+        "instagram": None,
+        "facebook": None
+    }
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].lower()
+        if "linkedin.com" in href and not socials["linkedin"]:
+            socials["linkedin"] = a["href"]
+        elif ("twitter.com" in href or "x.com" in href) and not socials["twitter"]:
+            socials["twitter"] = a["href"]
+        elif "instagram.com" in href and not socials["instagram"]:
+            socials["instagram"] = a["href"]
+        elif "facebook.com" in href and not socials["facebook"]:
+            socials["facebook"] = a["href"]
+
+    return phones, socials
+
+
 @app.get("/api/scan")
 async def scan_target(url: str = Query(..., description="Target URL to scan")):
     """
-    Scan a target URL and extract metadata, emails, and tech stack.
+    Scan a target URL and extract metadata, emails, phones, social links, and tech stack.
     """
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
@@ -97,6 +133,9 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
     # Extract email addresses
     emails = list(set(EMAIL_REGEX.findall(html_content)))
 
+    # Extract phones and socials (Feature 1 implementation)
+    phones, socials = extract_contacts(html_content, soup)
+
     # Detect tech stack
     tech_stack = detect_tech_stack(html_content)
 
@@ -104,6 +143,8 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
         "title": title,
         "meta_description": meta_desc,
         "emails": emails,
+        "phones": phones,
+        "socials": socials,
         "tech_stack": tech_stack,
     }
 
