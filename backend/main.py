@@ -1,3 +1,4 @@
+import asyncio
 import re
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Body
@@ -16,7 +17,7 @@ app.add_middleware(
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
     "Sec-Ch-Ua-Mobile": "?0",
@@ -24,7 +25,8 @@ HEADERS = {
 }
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
-PHONE_REGEX = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
+# Prevents matching CSS decimals or version strings (e.g. 0.4588235)
+PHONE_REGEX = re.compile(r"(?<![\d.])(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?![\d.])")
 
 
 def detect_tech_stack(html: str) -> dict:
@@ -88,7 +90,9 @@ def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict
     raw_phones = PHONE_REGEX.findall(html_content)
     for p in raw_phones:
         cleaned = p.strip()
-        if len(re.sub(r"\D", "", cleaned)) >= 10 and cleaned not in phones:
+        # Ensure it has between 10 and 15 digits (standard phone numbers)
+        digits = re.sub(r"\D", "", cleaned)
+        if 10 <= len(digits) <= 15 and cleaned not in phones:
             phones.append(cleaned)
 
     socials = {
@@ -113,6 +117,50 @@ def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict
             socials["facebook"] = href
 
     return phones[:5], socials
+
+
+async def process_single_url(client: httpx.AsyncClient, raw_url: str) -> dict:
+    target_url = raw_url.strip()
+    if not target_url:
+        return None
+    if not target_url.startswith(("http://", "https://")):
+        target_url = f"https://{target_url}"
+
+    try:
+        response = await client.get(target_url, headers=HEADERS)
+        html_content = response.text
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
+        meta_tag = (
+            soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
+            or soup.find("meta", attrs={"property": re.compile(r"^og:description$", re.I)})
+        )
+        meta_desc = meta_tag["content"].strip() if (meta_tag and meta_tag.get("content")) else ""
+
+        phones, socials = extract_contacts(html_content, soup)
+        tech_stack = detect_tech_stack(html_content)
+        trackers = detect_trackers(html_content)
+
+        return {
+            "url": target_url,
+            "status": "Success",
+            "title": title,
+            "meta_description": meta_desc,
+            "phones": phones[:2],
+            "socials": socials,
+            "tech_stack": tech_stack,
+            "trackers": trackers,
+        }
+    except Exception as e:
+        return {
+            "url": target_url,
+            "status": "Failed",
+            "error": str(e),
+            "tech_stack": {},
+            "trackers": {},
+            "phones": []
+        }
 
 
 @app.get("/api/scan")
@@ -174,52 +222,17 @@ async def scan_target(url: str = Query(..., description="Target URL to scan")):
 @app.post("/api/bulk-scan")
 async def bulk_scan_targets(urls: list[str] = Body(..., description="List of URLs to scan in bulk")):
     """
-    Asynchronously scan multiple URLs and return aggregated intelligence reports for CSV export.
+    Concurrent asynchronous scan of multiple URLs using asyncio.gather.
     """
-    results = []
-    
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        for raw_url in urls[:50]:  # Cap at 50 URLs per request
-            target_url = raw_url.strip()
-            if not target_url:
-                continue
-            if not target_url.startswith(("http://", "https://")):
-                target_url = f"https://{target_url}"
-                
-            try:
-                response = await client.get(target_url, headers=HEADERS)
-                html_content = response.text
-                soup = BeautifulSoup(html_content, "html.parser")
-                
-                title = soup.title.string.strip() if (soup.title and soup.title.string) else ""
-                meta_tag = (
-                    soup.find("meta", attrs={"name": re.compile(r"^description$", re.I)})
-                    or soup.find("meta", attrs={"property": re.compile(r"^og:description$", re.I)})
-                )
-                meta_desc = meta_tag["content"].strip() if (meta_tag and meta_tag.get("content")) else ""
-                
-                phones, socials = extract_contacts(html_content, soup)
-                tech_stack = detect_tech_stack(html_content)
-                trackers = detect_trackers(html_content)
-                
-                results.append({
-                    "url": target_url,
-                    "status": "Success",
-                    "title": title,
-                    "meta_description": meta_desc,
-                    "phones": phones[:2],
-                    "socials": socials,
-                    "tech_stack": tech_stack,
-                    "trackers": trackers
-                })
-            except Exception as e:
-                results.append({
-                    "url": target_url,
-                    "status": "Failed",
-                    "error": str(e)
-                })
-                
-    return {"results": results}
+    cleaned_urls = [u for u in urls[:50] if u.strip()]
+    if not cleaned_urls:
+        return {"results": []}
+
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        tasks = [process_single_url(client, u) for u in cleaned_urls]
+        results = await asyncio.gather(*tasks)
+
+    return {"results": [r for r in results if r is not None]}
 
 
 if __name__ == "__main__":

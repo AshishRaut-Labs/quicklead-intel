@@ -15,13 +15,13 @@ export default function QuickLeadDashboard() {
   const handleScan = async (e: React.FormEvent) => {
     e.preventDefault();
     if (mode === "single") {
-      if (!url) return;
+      if (!url.trim()) return;
       setLoading(true);
       setError("");
       setData(null);
 
       try {
-        const response = await fetch(`https://quicklead-intel.onrender.com/api/scan?url=${encodeURIComponent(url)}`);
+        const response = await fetch(`https://quicklead-intel.onrender.com/api/scan?url=${encodeURIComponent(url.trim())}`);
         if (!response.ok) throw new Error("Failed to scan the target URL.");
         
         const result = await response.json();
@@ -32,7 +32,7 @@ export default function QuickLeadDashboard() {
         setLoading(false);
       }
     } else {
-      if (!bulkUrls) return;
+      if (!bulkUrls.trim()) return;
       setLoading(true);
       setError("");
       setBulkData([]);
@@ -66,9 +66,9 @@ export default function QuickLeadDashboard() {
     if (mode === "single" && data) {
       const csvRows = [
         ["Metric", "Value"],
-        ["Title", `"${data.title || ""}"`],
-        ["Meta Description", `"${data.meta_description || ""}"`],
-        ["H1 Tags", `"${(data.h1_tags || []).join(" | ")}"`],
+        ["Title", `"${(data.title || "").replace(/"/g, '""')}"`],
+        ["Meta Description", `"${(data.meta_description || "").replace(/"/g, '""')}"`],
+        ["H1 Tags", `"${(data.h1_tags || []).join(" | ").replace(/"/g, '""')}"`],
         ["OG Image", `"${data.og_image || "None"}"`],
         ["Emails", `"${(data.emails || []).join(", ")}"`],
         ["Phones", `"${(data.phones || []).join(", ")}"`],
@@ -81,17 +81,18 @@ export default function QuickLeadDashboard() {
         ["TikTok Pixel", data.trackers?.tiktok_pixel ? "Yes" : "No"],
         ["HubSpot", data.trackers?.hubspot ? "Yes" : "No"],
         ["Klaviyo", data.trackers?.klaviyo ? "Yes" : "No"],
-        ["WordPress", data.tech_stack.wordpress ? "Yes" : "No"],
-        ["Shopify", data.tech_stack.shopify ? "Yes" : "No"],
-        ["Next.js", data.tech_stack.nextjs ? "Yes" : "No"],
-        ["Google Analytics", data.tech_stack.google_analytics ? "Yes" : "No"],
+        ["WordPress", data.tech_stack?.wordpress ? "Yes" : "No"],
+        ["Shopify", data.tech_stack?.shopify ? "Yes" : "No"],
+        ["Next.js", data.tech_stack?.nextjs ? "Yes" : "No"],
+        ["Google Analytics", data.tech_stack?.google_analytics ? "Yes" : "No"],
       ];
 
       const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
-      link.setAttribute("download", `quicklead_intel_${new URL(url.startsWith('http') ? url : `https://${url}`).hostname}.csv`);
+      const domainName = url.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split("/")[0] || "scan";
+      link.setAttribute("download", `quicklead_intel_${domainName}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -104,8 +105,8 @@ export default function QuickLeadDashboard() {
         csvRows.push([
           `"${item.url}"`,
           `"${item.status}"`,
-          `"${item.title || ""}"`,
-          `"${item.meta_description || ""}"`,
+          `"${(item.title || "").replace(/"/g, '""')}"`,
+          `"${(item.meta_description || "").replace(/"/g, '""')}"`,
           `"${(item.phones || []).join(", ")}"`,
           item.tech_stack?.wordpress ? "Yes" : "No",
           item.tech_stack?.shopify ? "Yes" : "No",
@@ -313,7 +314,7 @@ export default function QuickLeadDashboard() {
                           key={platform} 
                           href={link} 
                           target="_blank" 
-                          rel="noopener noreferrer"
+                          rel="noopener noreferrer" 
                           className="text-xs bg-neutral-950 border border-neutral-800 hover:border-neutral-600 px-2.5 py-1 rounded capitalize text-blue-400 transition-colors flex items-center gap-1.5"
                         >
                           <Share2 className="w-3 h-3 text-neutral-400" /> {platform}
@@ -334,10 +335,10 @@ export default function QuickLeadDashboard() {
                   <h3 className="font-medium text-neutral-200">Detected Tech Stack</h3>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  {Object.entries(data.tech_stack).map(([tech, isPresent]: any) => (
+                  {data.tech_stack && Object.entries(data.tech_stack).map(([tech, isPresent]: any) => (
                     <div key={tech} className="flex items-center justify-between bg-neutral-950 border border-neutral-800 px-3 py-2 rounded">
-                      <span className="text-sm capitalize text-neutral-300">{tech.replace('_', ' ')}</span>
-                      <span className={`w-2 h-2 rounded-full ${isPresent ? 'bg-green-500' : 'bg-neutral-700'}`}></span>
+                      <span className="text-sm capitalize text-neutral-300">{tech.replace(/_/g, ' ')}</span>
+                      <span className={`w-2 h-2 rounded-full ${isPresent ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-neutral-700'}`}></span>
                     </div>
                   ))}
                 </div>
@@ -352,8 +353,8 @@ export default function QuickLeadDashboard() {
                 <div className="grid grid-cols-2 gap-3">
                   {data.trackers && Object.entries(data.trackers).map(([tracker, isPresent]: any) => (
                     <div key={tracker} className="flex items-center justify-between bg-neutral-950 border border-neutral-800 px-3 py-2 rounded">
-                      <span className="text-sm capitalize text-neutral-300">{tracker.replace('_', ' ')}</span>
-                      <span className={`w-2 h-2 rounded-full ${isPresent ? 'bg-green-500' : 'bg-neutral-700'}`}></span>
+                      <span className="text-sm capitalize text-neutral-300">{tracker.replace(/_/g, ' ')}</span>
+                      <span className={`w-2 h-2 rounded-full ${isPresent ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-neutral-700'}`}></span>
                     </div>
                   ))}
                 </div>
@@ -420,7 +421,7 @@ export default function QuickLeadDashboard() {
                           <div className="flex gap-1.5 flex-wrap">
                             {item.tech_stack && Object.entries(item.tech_stack).map(([k, v]) => v ? (
                               <span key={k} className="text-[10px] bg-neutral-950 border border-neutral-800 px-1.5 py-0.5 rounded capitalize text-neutral-300">
-                                {k}
+                                {k.replace(/_/g, ' ')}
                               </span>
                             ) : null)}
                           </div>
@@ -429,7 +430,7 @@ export default function QuickLeadDashboard() {
                           <div className="flex gap-1.5 flex-wrap">
                             {item.trackers && Object.entries(item.trackers).map(([k, v]) => v ? (
                               <span key={k} className="text-[10px] bg-neutral-950 border border-neutral-800 px-1.5 py-0.5 rounded capitalize text-yellow-400">
-                                {k.replace('_', ' ')}
+                                {k.replace(/_/g, ' ')}
                               </span>
                             ) : null)}
                           </div>
