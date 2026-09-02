@@ -1,5 +1,6 @@
 import asyncio
 import re
+import urllib.parse
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,8 +85,10 @@ def extract_contacts(html_content: str, soup: BeautifulSoup) -> tuple[list, dict
     for a in soup.find_all("a", href=True):
         if a["href"].startswith("tel:"):
             raw_tel = a["href"].replace("tel:", "").strip()
-            if raw_tel not in phones:
-                phones.append(raw_tel)
+            # Decode URL encoding (e.g., %20 to space)
+            decoded_tel = urllib.parse.unquote(raw_tel)
+            if decoded_tel not in phones:
+                phones.append(decoded_tel)
 
     raw_phones = PHONE_REGEX.findall(html_content)
     for p in raw_phones:
