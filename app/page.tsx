@@ -887,6 +887,60 @@ export default function QuickLeadDashboard() {
     }
   };
 
+  /*
+   * Escape a CSV value safely.
+   */
+  const escapeCsvCell = (
+    cell: string | number | boolean
+  ): string => {
+    const value = String(
+      cell ?? ""
+    );
+
+    return `"${value.replace(
+      /"/g,
+      '""'
+    )}"`;
+  };
+
+  /*
+   * Prevent Excel from converting phone numbers into
+   * scientific notation.
+   *
+   * Example:
+   * +918658263639
+   *
+   * becomes an Excel text formula:
+   * =" +918658263639 "
+   *
+   * without spaces, of course.
+   *
+   * This keeps the exact phone number visible in Excel.
+   */
+  const prepareCsvCell = (
+    cell: string | number | boolean
+  ): string => {
+    const value = String(
+      cell ?? ""
+    );
+
+    const phoneLike =
+      /^\+\d{8,15}$/.test(
+        value.trim()
+      );
+
+    if (phoneLike) {
+      return `="${value.replace(
+        /"/g,
+        '""'
+      )}"`;
+    }
+
+    return escapeCsvCell(
+      cell
+    );
+  };
+
   const exportRowsAsCsv = (
     rows: (
       | string
@@ -894,29 +948,35 @@ export default function QuickLeadDashboard() {
       | boolean
     )[][]
   ): void => {
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
+    const csvText =
       rows
         .map((row) =>
           row
-            .map((cell) => {
-              const value =
-                String(
-                  cell ?? ""
-                );
-
-              return `"${value.replace(
-                /"/g,
-                '""'
-              )}"`;
-            })
+            .map(
+              prepareCsvCell
+            )
             .join(",")
         )
-        .join("\n");
+        .join("\r\n");
 
-    const encodedUri =
-      encodeURI(
-        csvContent
+    /*
+     * UTF-8 BOM is important for Excel so symbols such as
+     * ₹, £, €, ¥, etc. are decoded correctly.
+     */
+    const blob =
+      new Blob(
+        [
+          "\ufeff",
+          csvText,
+        ],
+        {
+          type: "text/csv;charset=utf-8;",
+        }
+      );
+
+    const url =
+      URL.createObjectURL(
+        blob
       );
 
     const link =
@@ -924,15 +984,10 @@ export default function QuickLeadDashboard() {
         "a"
       );
 
-    link.setAttribute(
-      "href",
-      encodedUri
-    );
+    link.href = url;
 
-    link.setAttribute(
-      "download",
-      "quicklead_intel_report.csv"
-    );
+    link.download =
+      "quicklead_intel_report.csv";
 
     document.body.appendChild(
       link
@@ -942,6 +997,10 @@ export default function QuickLeadDashboard() {
 
     document.body.removeChild(
       link
+    );
+
+    URL.revokeObjectURL(
+      url
     );
   };
 
