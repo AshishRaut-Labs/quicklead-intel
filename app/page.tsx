@@ -1,7 +1,11 @@
-```tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import {
+  useMemo,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import {
   Search,
@@ -158,7 +162,7 @@ export default function QuickLeadDashboard() {
   // HELPERS
   // =======================================================
 
-  const normalizeUrl = (value: string) => {
+  const normalizeUrl = (value: string): string => {
     const trimmed = value.trim();
 
     if (!trimmed) return "";
@@ -170,15 +174,12 @@ export default function QuickLeadDashboard() {
     return `https://${trimmed}`;
   };
 
-  const getDomainName = (value: string) => {
+  const getDomainName = (value: string): string => {
     try {
       const normalized = normalizeUrl(value);
       const parsed = new URL(normalized);
 
-      return parsed.hostname.replace(
-        /^www\./i,
-        ""
-      );
+      return parsed.hostname.replace(/^www\./i, "");
     } catch {
       return value
         .replace(/^https?:\/\//i, "")
@@ -187,7 +188,7 @@ export default function QuickLeadDashboard() {
     }
   };
 
-  const getScoreColor = (score: number) => {
+  const getScoreColor = (score: number): string => {
     if (score >= 80) return "text-green-400";
     if (score >= 60) return "text-blue-400";
     if (score >= 40) return "text-yellow-400";
@@ -196,7 +197,7 @@ export default function QuickLeadDashboard() {
 
   const getOpportunityClasses = (
     level?: string
-  ) => {
+  ): string => {
     switch (level) {
       case "HOT":
         return "bg-red-500/15 text-red-400 border-red-500/30";
@@ -214,7 +215,7 @@ export default function QuickLeadDashboard() {
 
   const getOpportunityRing = (
     level?: string
-  ) => {
+  ): string => {
     switch (level) {
       case "HOT":
         return "border-red-500/50";
@@ -232,19 +233,21 @@ export default function QuickLeadDashboard() {
 
   const getBooleanLabel = (
     value?: boolean
-  ) => {
+  ): string => {
     return value ? "Detected" : "Not detected";
   };
 
   const getBooleanClasses = (
     value?: boolean
-  ) => {
+  ): string => {
     return value
       ? "text-green-400"
       : "text-neutral-500";
   };
 
-  const getPrettyKey = (value: string) => {
+  const getPrettyKey = (
+    value: string
+  ): string => {
     return value
       .replace(/_/g, " ")
       .replace(/\b\w/g, (letter) =>
@@ -254,7 +257,7 @@ export default function QuickLeadDashboard() {
 
   const getBusinessDisplayName = (
     lead: LeadData
-  ) => {
+  ): string => {
     return (
       lead.business_name ||
       getDomainName(lead.url || "") ||
@@ -319,8 +322,8 @@ export default function QuickLeadDashboard() {
   // =======================================================
 
   const handleScan = async (
-    e: React.FormEvent
-  ) => {
+    e: FormEvent
+  ): Promise<void> => {
     e.preventDefault();
 
     setError("");
@@ -330,7 +333,6 @@ export default function QuickLeadDashboard() {
         setError(
           "Please enter a website URL."
         );
-
         return;
       }
 
@@ -371,10 +373,11 @@ export default function QuickLeadDashboard() {
           await response.json();
 
         setData(result);
-      } catch (err: any) {
+      } catch (err: unknown) {
         setError(
-          err?.message ||
-            "An unexpected error occurred while scanning the website."
+          err instanceof Error
+            ? err.message
+            : "An unexpected error occurred while scanning the website."
         );
       } finally {
         setLoading(false);
@@ -387,7 +390,6 @@ export default function QuickLeadDashboard() {
       setError(
         "Please enter at least one URL."
       );
-
       return;
     }
 
@@ -401,7 +403,6 @@ export default function QuickLeadDashboard() {
       setError(
         "Please enter at least one valid URL."
       );
-
       return;
     }
 
@@ -450,12 +451,15 @@ export default function QuickLeadDashboard() {
         await response.json();
 
       setBulkData(
-        result.results || []
+        Array.isArray(result?.results)
+          ? result.results
+          : []
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(
-        err?.message ||
-          "An unexpected error occurred during bulk scanning."
+        err instanceof Error
+          ? err.message
+          : "An unexpected error occurred during bulk scanning."
       );
     } finally {
       setLoading(false);
@@ -468,7 +472,7 @@ export default function QuickLeadDashboard() {
 
   const generateWebsiteForLead = async (
     lead: LeadData | null
-  ) => {
+  ): Promise<void> => {
     if (!lead) return;
 
     setGeneratingWebsite(true);
@@ -519,10 +523,11 @@ export default function QuickLeadDashboard() {
       setWebsitePreview(
         result.html
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(
-        err?.message ||
-          "Failed to generate the website preview."
+        err instanceof Error
+          ? err.message
+          : "Failed to generate the website preview."
       );
 
       setPreviewLead(null);
@@ -537,7 +542,7 @@ export default function QuickLeadDashboard() {
 
   const copyOutreach = async (
     lead: LeadData | null
-  ) => {
+  ): Promise<void> => {
     const pitch =
       lead?.intelligence
         ?.personalized_pitch || "";
@@ -546,7 +551,6 @@ export default function QuickLeadDashboard() {
       setError(
         "No outreach message is available for this lead."
       );
-
       return;
     }
 
@@ -573,7 +577,7 @@ export default function QuickLeadDashboard() {
 
   const exportRowsAsCsv = (
     rows: (string | number | boolean)[][]
-  ) => {
+  ): void => {
     const csvContent =
       "data:text/csv;charset=utf-8," +
       rows
@@ -616,7 +620,7 @@ export default function QuickLeadDashboard() {
     document.body.removeChild(link);
   };
 
-  const exportCSV = () => {
+  const exportCSV = (): void => {
     if (mode === "single" && data) {
       const intel =
         data.intelligence || {};
@@ -821,7 +825,6 @@ export default function QuickLeadDashboard() {
       );
 
       exportRowsAsCsv(rows);
-
       return;
     }
 
@@ -927,8 +930,8 @@ export default function QuickLeadDashboard() {
   const renderScoreCard = (
     label: string,
     score: number,
-    icon: React.ReactNode
-  ) => {
+    icon: ReactNode
+  ): ReactNode => {
     return (
       <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-5">
         <div className="flex items-center justify-between">
@@ -962,7 +965,7 @@ export default function QuickLeadDashboard() {
 
   const renderOpportunityBadge = (
     lead: LeadData
-  ) => {
+  ): ReactNode => {
     const level =
       lead.intelligence
         ?.opportunity_level ||
@@ -990,7 +993,7 @@ export default function QuickLeadDashboard() {
   const renderLeadDetails = (
     lead: LeadData,
     isModal = false
-  ) => {
+  ): ReactNode => {
     const intel =
       lead.intelligence || {};
 
@@ -1015,9 +1018,7 @@ export default function QuickLeadDashboard() {
             : "space-y-6"
         }
       >
-        {/* =============================================
-            PRIMARY SALES HEADER
-        ============================================== */}
+        {/* PRIMARY SALES HEADER */}
 
         <div
           className={`bg-neutral-900 border ${getOpportunityRing(
@@ -1154,9 +1155,7 @@ export default function QuickLeadDashboard() {
           </div>
         </div>
 
-        {/* =============================================
-            COMMERCIAL SUMMARY
-        ============================================== */}
+        {/* COMMERCIAL SUMMARY */}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
@@ -1227,9 +1226,7 @@ export default function QuickLeadDashboard() {
           </div>
         </div>
 
-        {/* =============================================
-            RECOMMENDATIONS
-        ============================================== */}
+        {/* RECOMMENDATIONS */}
 
         {intel.recommendations &&
           intel.recommendations.length >
@@ -1272,9 +1269,7 @@ export default function QuickLeadDashboard() {
             </div>
           )}
 
-        {/* =============================================
-            SALES OPPORTUNITIES
-        ============================================== */}
+        {/* SALES OPPORTUNITIES */}
 
         <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6">
           <div className="flex items-center justify-between gap-4 mb-5">
@@ -1293,8 +1288,7 @@ export default function QuickLeadDashboard() {
             </div>
 
             <div className="text-sm font-bold text-blue-400">
-              {intel.opportunity_score ??
-                0}
+              {intel.opportunity_score ?? 0}
               /100
             </div>
           </div>
@@ -1329,9 +1323,7 @@ export default function QuickLeadDashboard() {
           )}
         </div>
 
-        {/* =============================================
-            OUTREACH
-        ============================================== */}
+        {/* OUTREACH */}
 
         <div className="bg-blue-900/10 border border-blue-500/30 rounded-xl overflow-hidden">
           <button
@@ -1390,9 +1382,7 @@ export default function QuickLeadDashboard() {
           )}
         </div>
 
-        {/* =============================================
-            PROBLEMS
-        ============================================== */}
+        {/* PROBLEMS */}
 
         <div className="bg-red-950/15 border border-red-900/40 rounded-xl p-6">
           <div className="flex items-center gap-2 text-red-400 mb-4">
@@ -1435,9 +1425,7 @@ export default function QuickLeadDashboard() {
           )}
         </div>
 
-        {/* =============================================
-            TECHNICAL DETAILS
-        ============================================== */}
+        {/* TECHNICAL DETAILS */}
 
         <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
           <button
@@ -1472,7 +1460,9 @@ export default function QuickLeadDashboard() {
           {showTechnical && (
             <div className="p-6 pt-2 space-y-5">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
                 {/* SEO */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5 space-y-4">
                   <div className="flex items-center gap-2 text-neutral-400">
                     <FileText className="w-5 h-5 text-green-400" />
@@ -1569,7 +1559,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Contacts */}
+                {/* CONTACTS */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5 space-y-4">
                   <div className="flex items-center gap-2 text-neutral-400">
                     <Mail className="w-5 h-5 text-purple-400" />
@@ -1675,7 +1666,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Conversion */}
+                {/* CONVERSION */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5">
                   <div className="flex items-center gap-2 text-neutral-400 mb-4">
                     <Target className="w-5 h-5 text-blue-400" />
@@ -1758,7 +1750,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Tech */}
+                {/* TECH */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5">
                   <div className="flex items-center gap-2 text-neutral-400 mb-4">
                     <Code className="w-5 h-5 text-orange-400" />
@@ -1799,7 +1792,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Marketing */}
+                {/* MARKETING */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5">
                   <div className="flex items-center gap-2 text-neutral-400 mb-4">
                     <Globe className="w-5 h-5 text-yellow-400" />
@@ -1840,7 +1834,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Localization */}
+                {/* LOCALIZATION */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5">
                   <div className="flex items-center gap-2 text-neutral-400 mb-4">
                     <Globe className="w-5 h-5 text-blue-400" />
@@ -1895,7 +1890,8 @@ export default function QuickLeadDashboard() {
                   </div>
                 </div>
 
-                {/* Technical */}
+                {/* TECHNICAL */}
+
                 <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-5 md:col-span-2">
                   <div className="flex items-center gap-2 text-neutral-400 mb-4">
                     <Activity className="w-5 h-5 text-blue-400" />
@@ -1992,7 +1988,8 @@ export default function QuickLeadDashboard() {
           )}
         </div>
 
-        {/* Status */}
+        {/* STATUS */}
+
         {!isModal && (
           <div className="flex items-center justify-between text-xs text-neutral-600 px-1">
             <span>
@@ -2019,7 +2016,9 @@ export default function QuickLeadDashboard() {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-4 md:p-8 font-sans">
       <div className="max-w-7xl mx-auto space-y-6">
+
         {/* HEADER */}
+
         <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-5 border-b border-neutral-800 pb-6">
           <div>
             <div className="flex items-center gap-2">
@@ -2040,9 +2039,7 @@ export default function QuickLeadDashboard() {
               onClick={() => {
                 setMode("single");
                 setBulkData([]);
-                setSelectedLead(
-                  null
-                );
+                setSelectedLead(null);
               }}
               className={`px-4 py-2 rounded-md text-xs font-medium transition-colors ${
                 mode === "single"
@@ -2070,6 +2067,7 @@ export default function QuickLeadDashboard() {
         </div>
 
         {/* SCANNER */}
+
         <form
           onSubmit={handleScan}
           className="bg-neutral-900 border border-neutral-800 rounded-xl p-5"
@@ -2156,6 +2154,7 @@ export default function QuickLeadDashboard() {
         </form>
 
         {/* ERROR */}
+
         {error && (
           <div className="bg-red-500/10 border border-red-500/40 text-red-400 p-4 rounded-lg text-sm flex items-start gap-2">
             <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -2165,6 +2164,7 @@ export default function QuickLeadDashboard() {
         )}
 
         {/* SINGLE */}
+
         {mode === "single" &&
           data && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -2194,10 +2194,13 @@ export default function QuickLeadDashboard() {
           )}
 
         {/* BULK */}
+
         {mode === "bulk" &&
           bulkData.length > 0 && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
               {/* BULK METRICS */}
+
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
                   <p className="text-xs text-neutral-500 uppercase tracking-wider">
@@ -2254,6 +2257,7 @@ export default function QuickLeadDashboard() {
               </div>
 
               {/* TABLE HEADER */}
+
               <div className="flex flex-col md:flex-row justify-between md:items-center gap-3 border-b border-neutral-800 pb-4">
                 <div>
                   <h2 className="text-xl font-semibold">
@@ -2276,6 +2280,7 @@ export default function QuickLeadDashboard() {
               </div>
 
               {/* TABLE */}
+
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
@@ -2378,11 +2383,11 @@ export default function QuickLeadDashboard() {
                                 "Success" ? (
                                   <span
                                     className={`font-bold ${getScoreColor(
-                                      intel.website_score ||
+                                      intel.website_score ??
                                         0
                                     )}`}
                                   >
-                                    {intel.website_score ||
+                                    {intel.website_score ??
                                       0}
                                   </span>
                                 ) : (
@@ -2397,7 +2402,7 @@ export default function QuickLeadDashboard() {
                                 "Success" ? (
                                   <div className="flex flex-col gap-1">
                                     <span className="font-bold text-blue-400">
-                                      {intel.opportunity_score ||
+                                      {intel.opportunity_score ??
                                         0}
                                       /100
                                     </span>
@@ -2504,6 +2509,7 @@ export default function QuickLeadDashboard() {
           )}
 
         {/* EMPTY BULK */}
+
         {mode === "bulk" &&
           bulkData.length === 0 &&
           !loading && (
@@ -2521,9 +2527,7 @@ export default function QuickLeadDashboard() {
           )}
       </div>
 
-      {/* ===================================================
-          WEBSITE PREVIEW MODAL
-      ==================================================== */}
+      {/* WEBSITE PREVIEW MODAL */}
 
       {websitePreview && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-2 md:p-5">
@@ -2591,9 +2595,7 @@ export default function QuickLeadDashboard() {
         </div>
       )}
 
-      {/* ===================================================
-          BULK LEAD DETAIL MODAL
-      ==================================================== */}
+      {/* BULK LEAD DETAIL MODAL */}
 
       {selectedLead && (
         <div className="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm p-3 md:p-6 overflow-y-auto">
@@ -2624,4 +2626,3 @@ export default function QuickLeadDashboard() {
     </div>
   );
 }
-```
