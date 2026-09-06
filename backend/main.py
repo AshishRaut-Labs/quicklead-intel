@@ -1,3 +1,4 @@
+```python
 # QuickLead Intel V6 - Global Sales Intelligence + Data Quality Engine
 
 import asyncio
@@ -19,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.0.0",
+    version="6.0.1",
 )
 
 app.add_middleware(
@@ -217,8 +218,6 @@ GENERIC_NAME_PATTERNS = {
     "your company",
 }
 
-# V6:
-# Reject obvious CTA/action text from becoming a company name.
 BUSINESS_NAME_NOISE = {
     "download",
     "download brochure",
@@ -556,8 +555,6 @@ CURRENCY_SYMBOL_MAP = {
     "MXN": "MX$",
 }
 
-# Internal indicative display conversion.
-# These are presentation values, not live exchange rates.
 INDICATIVE_USD_RATES = {
     "USD": 1.0,
     "CAD": 1.36,
@@ -656,7 +653,20 @@ def looks_generic_business_name(
     if text in BUSINESS_NAME_NOISE:
         return True
 
-    # Strong CTA/action language is not a business name.
+    # Reject numeric-only/footer junk such as "3".
+    if re.fullmatch(
+        r"[\d\s.,+%/():\-]+",
+        text,
+    ):
+        return True
+
+    # Reject strings that are effectively just punctuation/numbers.
+    if not re.search(
+        r"[a-zA-Z]",
+        text,
+    ):
+        return True
+
     action_words = [
         "download",
         "click",
@@ -686,7 +696,6 @@ def looks_generic_business_name(
     if action_count >= 2:
         return True
 
-    # A business name should not read like a sentence/instruction.
     if len(text.split()) > 8:
         return True
 
@@ -704,7 +713,6 @@ def clean_business_name_candidate(
     if not value:
         return ""
 
-    # Remove common copyright/footer noise.
     value = re.sub(
         r"\s*,?\s*(all rights reserved\.?).*$",
         "",
@@ -738,7 +746,6 @@ def clean_business_name_candidate(
         value,
     ).strip()
 
-    # Remove CTA fragments embedded in footer text.
     value = re.sub(
         r"\b(?:download|read|learn|view)\s+"
         r"(?:the\s+)?(?:brochure|broucher|more|details?)\b.*$",
@@ -930,7 +937,6 @@ def infer_business_name_from_domain(
     )
 
     if len(words) == 1:
-        # Split simple camel-case-like domain fragments.
         parts = re.findall(
             r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)|\d+",
             words[0],
@@ -969,8 +975,11 @@ def extract_business_name(
     soup: BeautifulSoup,
 ) -> tuple[str, str, int]:
 
+    # IMPORTANT:
+    # Every tuple in candidates MUST be:
+    # (business_name, source, confidence)
     candidates: list[
-        tuple[str, int, str]
+        tuple[str, str, int]
     ] = []
 
     # -----------------------------------------------------
@@ -1036,8 +1045,8 @@ def extract_business_name(
                     candidates.append(
                         (
                             cleaned,
-                            95,
                             "json_ld",
+                            95,
                         )
                     )
 
@@ -1074,21 +1083,138 @@ def extract_business_name(
                     candidates.append(
                         (
                             cleaned,
-                            92,
                             "json_ld_brand",
+                            92,
                         )
                     )
 
     if candidates:
         candidates.sort(
             key=lambda item: (
-                item[1],
+                item[2],
                 name_quality(item[0]),
             ),
             reverse=True,
         )
 
         return candidates[0]
+
+    # -----------------------------------------------------
+    # Explicit visible brand mentions
+    #
+    # This is added before footer fallback so a real
+    # company name in the page wins over random footer
+    # child elements.
+    # -----------------------------------------------------
+
+    page_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+    )
+
+    brand_candidates: list[str] = []
+
+    brand_patterns = [
+        re.compile(
+            r"\b(?:about|welcome\s+to|at|from|by)\s+"
+            r"([A-Z][A-Za-z0-9&.'’\-]*(?:\s+[A-Z][A-Za-z0-9&.'’\-]*){0,4})"
+            r"(?=\s+(?:is|was|offers|provides|specializes|delivers|we\b)|[,.!?]|$)",
+            re.I,
+        ),
+        re.compile(
+            r"\b([A-Z][A-Za-z0-9&.'’\-]*(?:\s+[A-Z][A-Za-z0-9&.'’\-]*){0,4})\s+"
+            r"(?:is|was|offers|provides|specializes|delivers)\b",
+            re.I,
+        ),
+    ]
+
+    for element in soup.find_all(
+        [
+            "h1",
+            "h2",
+            "h3",
+            "p",
+            "strong",
+            "b",
+            "span",
+        ]
+    ):
+        element_text = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not element_text:
+            continue
+
+        if len(element_text) > 220:
+            continue
+
+        for pattern in brand_patterns:
+            for match in pattern.finditer(
+                element_text
+            ):
+                candidate = (
+                    clean_business_name_candidate(
+                        match.group(1)
+                    )
+                )
+
+                if (
+                    candidate
+                    and not looks_generic_business_name(
+                        candidate
+                    )
+                    and name_quality(candidate) >= 45
+                ):
+                    brand_candidates.append(
+                        candidate
+                    )
+
+    if brand_candidates:
+        counts: dict[str, int] = {}
+
+        for candidate in brand_candidates:
+            key = candidate.casefold()
+
+            counts[key] = (
+                counts.get(
+                    key,
+                    0,
+                )
+                + 1
+            )
+
+        ranked_brand_candidates = sorted(
+            brand_candidates,
+            key=lambda item: (
+                counts.get(
+                    item.casefold(),
+                    0,
+                ),
+                name_quality(item),
+            ),
+            reverse=True,
+        )
+
+        if ranked_brand_candidates:
+            best_brand = ranked_brand_candidates[0]
+
+            return (
+                best_brand,
+                "page_brand",
+                94
+                if counts.get(
+                    best_brand.casefold(),
+                    0,
+                )
+                >= 2
+                else 90,
+            )
 
     # -----------------------------------------------------
     # OpenGraph site name
@@ -1277,7 +1403,6 @@ def extract_business_name(
             )
         )
 
-        # Copyright names.
         copyright_patterns = [
             r"(?:©|copyright)\s*(?:\d{4}\s*)?([^|•]+)",
             r"(?:©|copyright)\s*(?:\d{4}\s*)?([A-Za-z0-9&.,'’\- ]{2,80})",
@@ -1294,6 +1419,13 @@ def extract_business_name(
                 cleaned = clean_business_name_candidate(
                     match
                 )
+
+                # Never accept numeric-only footer junk.
+                if re.fullmatch(
+                    r"[\d\s.,+%/():\-]+",
+                    cleaned,
+                ):
+                    continue
 
                 quality = name_quality(
                     cleaned
@@ -1313,9 +1445,13 @@ def extract_business_name(
                         )
                     )
 
-        # Look at short footer child elements.
         for child in footer.find_all(
-            ["a", "span", "div", "p"],
+            [
+                "a",
+                "span",
+                "div",
+                "p",
+            ],
         ):
             child_text = clean_text(
                 child.get_text(
@@ -1331,9 +1467,23 @@ def extract_business_name(
             ):
                 continue
 
+            # Explicitly reject things like "3", "2026",
+            # phone numbers, counter values, etc.
+            if re.fullmatch(
+                r"[\d\s.,+%/():\-]+",
+                child_text,
+            ):
+                continue
+
             cleaned = clean_business_name_candidate(
                 child_text
             )
+
+            if re.fullmatch(
+                r"[\d\s.,+%/():\-]+",
+                cleaned,
+            ):
+                continue
 
             quality = name_quality(
                 cleaned
@@ -1374,8 +1524,10 @@ def extract_business_name(
         )
 
         if ranked:
+            candidate = ranked[0][0]
+
             return (
-                ranked[0][0],
+                candidate,
                 "footer",
                 70,
             )
@@ -1481,7 +1633,6 @@ def get_phone_country(
     if not digits:
         return None
 
-    # Longest prefixes first.
     unique_codes = sorted(
         set(
             COUNTRY_DIAL_CODES.values()
@@ -1502,7 +1653,6 @@ def get_phone_country(
             ]
 
             if matches:
-                # NANP is shared between US/Canada.
                 if code == "1":
                     return "US"
 
@@ -1532,21 +1682,18 @@ def is_plausible_phone_for_country(
     ):
         return False
 
-    # India:
-    # Mobile numbers are normally 10 digits beginning with 6-9.
     if country_hint == "IN":
         if len(digits) == 10:
             return digits[0] in "6789"
 
         if len(digits) == 12 and digits.startswith("91"):
             local = digits[2:]
+
             return (
                 len(local) == 10
                 and local[0] in "6789"
             )
 
-        # Indian landlines may be 10 digits or
-        # already international in different forms.
         if len(digits) == 11 and digits.startswith("0"):
             local = digits[1:]
 
@@ -1567,7 +1714,6 @@ def is_plausible_phone_for_country(
 
         return False
 
-    # Generic international validation.
     return 8 <= len(digits) <= 15
 
 
@@ -1664,7 +1810,6 @@ def normalize_phone_for_country(
 
         if dial_code:
 
-            # Already starts with country code.
             if (
                 digits.startswith(
                     dial_code
@@ -1678,7 +1823,6 @@ def normalize_phone_for_country(
                 ):
                     return f"+{digits}"
 
-            # India-specific local validation.
             if country_hint == "IN":
 
                 local_digits = digits
@@ -1688,7 +1832,6 @@ def normalize_phone_for_country(
                 ):
                     local_digits = local_digits[1:]
 
-                # Mobile.
                 if (
                     len(local_digits) == 10
                     and local_digits[0] in "6789"
@@ -1697,7 +1840,6 @@ def normalize_phone_for_country(
                         f"+91{local_digits}"
                     )
 
-                # Landline.
                 if (
                     len(local_digits) == 10
                     and local_digits[0] in "234"
@@ -1708,7 +1850,6 @@ def normalize_phone_for_country(
 
                 return None
 
-            # Generic countries.
             local_digits = digits
 
             if (
@@ -1800,14 +1941,133 @@ def extract_phone_numbers(
                         digits
                     )
 
+    # -----------------------------------------------------
+    # Contact-region extraction.
+    #
+    # This allows legitimate local numbers such as:
+    # +91 9124732901, 9124574531
+    # to be handled after country detection.
+    # -----------------------------------------------------
+
+    contact_regions = []
+
+    for selector in [
+        "footer",
+        "address",
+        "#contact",
+        "[id*='contact']",
+        "[class*='contact']",
+        "[class*='footer']",
+        "[id*='footer']",
+    ]:
+        try:
+            contact_regions.extend(
+                soup.select(
+                    selector
+                )
+            )
+        except Exception:
+            continue
+
+    unique_region_ids = set()
+
+    for region in contact_regions:
+        region_id = id(region)
+
+        if region_id in unique_region_ids:
+            continue
+
+        unique_region_ids.add(
+            region_id
+        )
+
+        region_text = clean_text(
+            region.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not region_text:
+            continue
+
+        for candidate in PHONE_CANDIDATE_REGEX.findall(
+            region_text
+        ):
+            # Allow local numbers here because the region
+            # itself is contact-related.
+            normalized = normalize_phone_for_country(
+                candidate,
+                None,
+            )
+
+            if normalized:
+                digits = re.sub(
+                    r"\D",
+                    "",
+                    normalized,
+                )
+
+                if digits not in seen_digits:
+                    phones.append(
+                        normalized
+                    )
+
+                    seen_digits.add(
+                        digits
+                    )
+
+    # -----------------------------------------------------
+    # Whole-page fallback.
+    #
+    # Naked random 10-digit numbers can be false positives,
+    # so they need contextual support.
+    # -----------------------------------------------------
+
     visible_text = soup.get_text(
         " ",
         strip=True,
     )
 
-    for candidate in PHONE_CANDIDATE_REGEX.findall(
+    for match in PHONE_CANDIDATE_REGEX.finditer(
         visible_text
     ):
+        candidate = clean_text(
+            match.group(0)
+        )
+
+        raw_digits = re.sub(
+            r"\D",
+            "",
+            candidate,
+        )
+
+        if (
+            len(raw_digits) >= 10
+            and re.fullmatch(
+                r"\d{10,15}",
+                candidate,
+            )
+        ):
+            context = visible_text[
+                max(
+                    0,
+                    match.start() - 80,
+                ):
+                min(
+                    len(visible_text),
+                    match.end() + 80,
+                )
+            ]
+
+            if not re.search(
+                r"\b(?:phone|mobile|tel|telephone|"
+                r"call|whatsapp|contact|sales|office)\b",
+                context,
+                re.I,
+            ):
+                continue
+
         normalized = normalize_phone_for_country(
             candidate,
             None,
@@ -2467,7 +2727,6 @@ def detect_locale_signals(
         "None"
     )
 
-    # Language is deliberately weak evidence.
     if language and "-" in language:
         possible = language.rsplit(
             "-",
@@ -2568,7 +2827,6 @@ def detect_locale_signals(
                 currency
             )
 
-    # TLD.
     tld = ""
 
     hostname = get_domain(
@@ -2585,7 +2843,6 @@ def detect_locale_signals(
         tld
     )
 
-    # Explicit country.
     explicit_countries = extract_country_names(
         text[:40000]
     )
@@ -2596,7 +2853,6 @@ def detect_locale_signals(
         else None
     )
 
-    # Phone evidence.
     phone_countries: list[str] = []
 
     if phones:
@@ -2619,10 +2875,6 @@ def detect_locale_signals(
         else None
     )
 
-    # -----------------------------------------------------
-    # Evidence
-    # -----------------------------------------------------
-
     evidence: dict[str, int] = {}
 
     def add(
@@ -2640,7 +2892,6 @@ def detect_locale_signals(
             + weight
         )
 
-    # Strongest.
     add(
         phone_country,
         100,
@@ -2724,7 +2975,6 @@ def detect_locale_signals(
             18,
         )
 
-    # Language only receives weak evidence.
     add(
         language_country,
         5,
@@ -2750,17 +3000,12 @@ def detect_locale_signals(
         else:
             country_confidence = "Low"
 
-    # -----------------------------------------------------
-    # Primary currency
-    # -----------------------------------------------------
-
     primary_currency = None
     primary_currency_symbol = None
     currency_source = "unknown"
 
     if currency_hints:
 
-        # Prefer the first detected site currency.
         primary_currency = (
             currency_hints[0]
         )
@@ -2787,10 +3032,6 @@ def detect_locale_signals(
         currency_source = (
             "country_inferred"
         )
-
-    # -----------------------------------------------------
-    # Country evidence labels
-    # -----------------------------------------------------
 
     country_evidence = {
         "phone_country": phone_country,
@@ -3063,12 +3304,19 @@ def generate_sales_intel(
         )
     )
 
-    h1_count = int(
-        data.get(
-            "h1_count",
-            0,
+    try:
+        h1_count = int(
+            data.get(
+                "h1_count",
+                0,
+            )
+            or 0
         )
-    )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        h1_count = 0
 
     conversion = data.get(
         "conversion_signals",
@@ -3097,19 +3345,26 @@ def generate_sales_intel(
         )
     )
 
-    business_name_confidence = int(
-        data.get(
-            "business_name_confidence",
-            0,
+    try:
+        business_name_confidence = int(
+            data.get(
+                "business_name_confidence",
+                0,
+            )
+            or 0
         )
-        or 0
-    )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        # Defensive fallback in case an old/legacy
+        # tuple accidentally sends the source string here.
+        business_name_confidence = 0
 
     # =====================================================
     # WEBSITE HEALTH
     # =====================================================
 
-    # SEO 35
     seo_score = 35
 
     if not title:
@@ -3150,7 +3405,6 @@ def generate_sales_intel(
         seo_score,
     )
 
-    # Conversion 40
     conversion_score = 40
 
     has_contact_path = (
@@ -3221,7 +3475,6 @@ def generate_sales_intel(
         conversion_score,
     )
 
-    # Technical 25
     technical_score = 25
 
     if not technical.get(
@@ -3293,19 +3546,33 @@ def generate_sales_intel(
         {},
     )
 
-    commercial_keyword_count = int(
-        business_signals.get(
-            "commercial_keyword_count",
-            0,
+    try:
+        commercial_keyword_count = int(
+            business_signals.get(
+                "commercial_keyword_count",
+                0,
+            )
+            or 0
         )
-    )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        commercial_keyword_count = 0
 
-    navigation_signals = int(
-        business_signals.get(
-            "commercial_navigation_signals",
-            0,
+    try:
+        navigation_signals = int(
+            business_signals.get(
+                "commercial_navigation_signals",
+                0,
+            )
+            or 0
         )
-    )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        navigation_signals = 0
 
     if commercial_keyword_count >= 10:
         commercial_intent = "HIGH"
@@ -3320,7 +3587,6 @@ def generate_sales_intel(
 
     opportunity_score = 0
 
-    # Conversion gaps.
     if not conversion.get(
         "has_cta"
     ):
@@ -3368,7 +3634,6 @@ def generate_sales_intel(
             "Create a dedicated enquiry, booking or quote path"
         )
 
-    # SEO gaps.
     if not meta_description:
         opportunity_score += 5
         opportunity_reasons.append(
@@ -3409,7 +3674,6 @@ def generate_sales_intel(
             "Add a professional Open Graph/social sharing image"
         )
 
-    # Marketing.
     if not trackers.get(
         "google_analytics"
     ):
@@ -3432,7 +3696,6 @@ def generate_sales_intel(
             "Add Meta tracking if paid social acquisition is relevant"
         )
 
-    # Commercial intent.
     if commercial_keyword_count >= 10:
         opportunity_score += 9
         opportunity_reasons.append(
@@ -3456,7 +3719,6 @@ def generate_sales_intel(
     elif navigation_signals >= 1:
         opportunity_score += 2
 
-    # Health contribution.
     if website_score < 50:
         opportunity_score += 12
     elif website_score < 65:
@@ -3468,7 +3730,6 @@ def generate_sales_intel(
     elif website_score < 92:
         opportunity_score += 2
 
-    # Contact evidence.
     if data.get("emails"):
         opportunity_score += 2
 
@@ -3480,8 +3741,6 @@ def generate_sales_intel(
     ):
         opportunity_score += 2
 
-    # Low-confidence company name should not artificially
-    # increase commercial relevance.
     if (
         business_name_confidence >= 75
         and business_name
@@ -3754,8 +4013,6 @@ def generate_sales_intel(
         or "$"
     )
 
-    # Display the localized range while preserving
-    # the original USD values internally.
     if (
         localized_project_value.get(
             "currency"
@@ -3840,6 +4097,11 @@ def generate_sales_intel(
             localized_project_value
         ),
 
+        "primary_currency": primary_currency,
+        "primary_currency_symbol": (
+            primary_currency_symbol
+        ),
+
         "lead_type": lead_type,
         "lead_type_confidence": lead_type_confidence,
 
@@ -3914,8 +4176,6 @@ async def process_single_url(
             soup
         )
 
-        # V6 fallback:
-        # if extraction returned CTA/noise, infer from domain.
         if (
             not business_name
             or looks_generic_business_name(
@@ -4039,9 +4299,6 @@ async def process_single_url(
 
         # -------------------------------------------------
         # First locale pass
-        #
-        # We use the raw phone results to determine
-        # country before doing final normalization.
         # -------------------------------------------------
 
         preliminary_locale = detect_locale_signals(
@@ -4060,7 +4317,71 @@ async def process_single_url(
 
         normalized_phones: list[str] = []
 
-        for phone in phones:
+        # Re-extract phone candidates after determining
+        # likely country, so local numbers can be converted.
+        contact_regions = []
+
+        for selector in [
+            "footer",
+            "address",
+            "#contact",
+            "[id*='contact']",
+            "[class*='contact']",
+            "[class*='footer']",
+            "[id*='footer']",
+        ]:
+            try:
+                contact_regions.extend(
+                    soup.select(
+                        selector
+                    )
+                )
+            except Exception:
+                continue
+
+        raw_phone_candidates = list(
+            phones
+        )
+
+        for region in contact_regions:
+            region_text = clean_text(
+                region.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if region_text:
+                raw_phone_candidates.extend(
+                    PHONE_CANDIDATE_REGEX.findall(
+                        region_text
+                    )
+                )
+
+        # Explicit tel links again.
+        for anchor in soup.find_all(
+            "a",
+            href=True,
+        ):
+            href = clean_text(
+                anchor.get(
+                    "href",
+                    "",
+                )
+            )
+
+            if href.lower().startswith(
+                "tel:"
+            ):
+                raw_phone_candidates.append(
+                    urllib.parse.unquote(
+                        href[4:]
+                    ).strip()
+                )
+
+        seen_normalized = set()
+
+        for phone in raw_phone_candidates:
             normalized = normalize_phone_for_country(
                 phone,
                 country_hint,
@@ -4073,17 +4394,16 @@ async def process_single_url(
                     normalized,
                 )
 
-                if not any(
-                    re.sub(
-                        r"\D",
-                        "",
-                        existing,
-                    )
-                    == digits
-                    for existing in normalized_phones
+                if (
+                    digits
+                    not in seen_normalized
                 ):
                     normalized_phones.append(
                         normalized
+                    )
+
+                    seen_normalized.add(
+                        digits
                     )
 
         phones = normalized_phones[:8]
@@ -5134,7 +5454,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.0.0",
+        "version": "6.0.1",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
@@ -5153,3 +5473,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
     )
+```
