@@ -1,4 +1,3 @@
-```python
 # QuickLead Intel V6 - Global Sales Intelligence + Data Quality Engine
 
 import asyncio
@@ -20,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.0.1",
+    version="6.0.2",
 )
 
 app.add_middleware(
@@ -653,14 +652,12 @@ def looks_generic_business_name(
     if text in BUSINESS_NAME_NOISE:
         return True
 
-    # Reject numeric-only/footer junk such as "3".
     if re.fullmatch(
         r"[\d\s.,+%/():\-]+",
         text,
     ):
         return True
 
-    # Reject strings that are effectively just punctuation/numbers.
     if not re.search(
         r"[a-zA-Z]",
         text,
@@ -975,9 +972,6 @@ def extract_business_name(
     soup: BeautifulSoup,
 ) -> tuple[str, str, int]:
 
-    # IMPORTANT:
-    # Every tuple in candidates MUST be:
-    # (business_name, source, confidence)
     candidates: list[
         tuple[str, str, int]
     ] = []
@@ -1092,7 +1086,9 @@ def extract_business_name(
         candidates.sort(
             key=lambda item: (
                 item[2],
-                name_quality(item[0]),
+                name_quality(
+                    item[0]
+                ),
             ),
             reverse=True,
         )
@@ -1101,10 +1097,6 @@ def extract_business_name(
 
     # -----------------------------------------------------
     # Explicit visible brand mentions
-    #
-    # This is added before footer fallback so a real
-    # company name in the page wins over random footer
-    # child elements.
     # -----------------------------------------------------
 
     page_text = clean_text(
@@ -1420,7 +1412,6 @@ def extract_business_name(
                     match
                 )
 
-                # Never accept numeric-only footer junk.
                 if re.fullmatch(
                     r"[\d\s.,+%/():\-]+",
                     cleaned,
@@ -1467,8 +1458,6 @@ def extract_business_name(
             ):
                 continue
 
-            # Explicitly reject things like "3", "2026",
-            # phone numbers, counter values, etc.
             if re.fullmatch(
                 r"[\d\s.,+%/():\-]+",
                 child_text,
@@ -1686,7 +1675,10 @@ def is_plausible_phone_for_country(
         if len(digits) == 10:
             return digits[0] in "6789"
 
-        if len(digits) == 12 and digits.startswith("91"):
+        if (
+            len(digits) == 12
+            and digits.startswith("91")
+        ):
             local = digits[2:]
 
             return (
@@ -1694,7 +1686,10 @@ def is_plausible_phone_for_country(
                 and local[0] in "6789"
             )
 
-        if len(digits) == 11 and digits.startswith("0"):
+        if (
+            len(digits) == 11
+            and digits.startswith("0")
+        ):
             local = digits[1:]
 
             if (
@@ -1703,7 +1698,10 @@ def is_plausible_phone_for_country(
             ):
                 return True
 
-        if len(digits) == 12 and digits.startswith("91"):
+        if (
+            len(digits) == 12
+            and digits.startswith("91")
+        ):
             local = digits[2:]
 
             if (
@@ -1943,10 +1941,6 @@ def extract_phone_numbers(
 
     # -----------------------------------------------------
     # Contact-region extraction.
-    #
-    # This allows legitimate local numbers such as:
-    # +91 9124732901, 9124574531
-    # to be handled after country detection.
     # -----------------------------------------------------
 
     contact_regions = []
@@ -1994,8 +1988,6 @@ def extract_phone_numbers(
         for candidate in PHONE_CANDIDATE_REGEX.findall(
             region_text
         ):
-            # Allow local numbers here because the region
-            # itself is contact-related.
             normalized = normalize_phone_for_country(
                 candidate,
                 None,
@@ -2019,9 +2011,6 @@ def extract_phone_numbers(
 
     # -----------------------------------------------------
     # Whole-page fallback.
-    #
-    # Naked random 10-digit numbers can be false positives,
-    # so they need contextual support.
     # -----------------------------------------------------
 
     visible_text = soup.get_text(
@@ -3197,17 +3186,6 @@ def format_currency_value(
         )
     )
 
-    if currency in {
-        "JPY",
-        "INR",
-        "KRW",
-        "VND",
-    }:
-        return (
-            f"{currency_symbol}"
-            f"{value:,}"
-        )
-
     return (
         f"{currency_symbol}"
         f"{value:,}"
@@ -3253,23 +3231,26 @@ def build_localized_project_value(
         )
     )
 
+    formatted_min = format_currency_value(
+        localized_min,
+        currency,
+        symbol,
+    )
+
+    formatted_max = format_currency_value(
+        localized_max,
+        currency,
+        symbol,
+    )
+
     return {
         "currency": currency,
         "symbol": symbol,
         "min": localized_min,
         "max": localized_max,
         "formatted": (
-            f"{format_currency_value(
-                localized_min,
-                currency,
-                symbol,
-            )}"
-            f" - "
-            f"{format_currency_value(
-                localized_max,
-                currency,
-                symbol,
-            )}"
+            f"{formatted_min} - "
+            f"{formatted_max}"
         ),
         "source": locale_signals.get(
             "currency_source",
@@ -3345,21 +3326,28 @@ def generate_sales_intel(
         )
     )
 
-    try:
-        business_name_confidence = int(
-            data.get(
-                "business_name_confidence",
-                0,
-            )
-            or 0
-        )
-    except (
-        TypeError,
-        ValueError,
+    raw_business_name_confidence = data.get(
+        "business_name_confidence",
+        0,
+    )
+
+    if isinstance(
+        raw_business_name_confidence,
+        int,
     ):
-        # Defensive fallback in case an old/legacy
-        # tuple accidentally sends the source string here.
-        business_name_confidence = 0
+        business_name_confidence = (
+            raw_business_name_confidence
+        )
+    else:
+        try:
+            business_name_confidence = int(
+                raw_business_name_confidence
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            business_name_confidence = 0
 
     # =====================================================
     # WEBSITE HEALTH
@@ -4057,7 +4045,8 @@ def generate_sales_intel(
     )
 
     pitch = (
-        f"Hi, I was reviewing {outreach_business_name}'s website "
+        f"Hi, I was reviewing "
+        f"{outreach_business_name}'s website "
         f"and noticed {pitch_reason}. "
         f"I found a few areas where the customer journey "
         f"could be clearer and easier for potential customers "
@@ -4168,13 +4157,96 @@ async def process_single_url(
         # Business name
         # -------------------------------------------------
 
-        (
-            business_name,
-            business_name_source,
-            business_name_confidence,
-        ) = extract_business_name(
+        name_result = extract_business_name(
             soup
         )
+
+        # -------------------------------------------------
+        # Defensive compatibility handling.
+        #
+        # Correct tuple:
+        # (business_name, source, confidence)
+        #
+        # Legacy broken tuple:
+        # (business_name, confidence, source)
+        # -------------------------------------------------
+
+        if not isinstance(
+            name_result,
+            tuple,
+        ):
+            business_name = ""
+            business_name_source = "unknown"
+            business_name_confidence = 0
+
+        elif len(name_result) < 3:
+            business_name = ""
+            business_name_source = "unknown"
+            business_name_confidence = 0
+
+        else:
+            business_name = name_result[0]
+            second_value = name_result[1]
+            third_value = name_result[2]
+
+            if (
+                isinstance(
+                    second_value,
+                    int,
+                )
+                and isinstance(
+                    third_value,
+                    str,
+                )
+            ):
+                # Legacy tuple:
+                # (name, 95, "json_ld")
+                business_name_source = third_value
+                business_name_confidence = second_value
+
+            else:
+                # Correct tuple:
+                # (name, "json_ld", 95)
+                business_name_source = second_value
+                business_name_confidence = third_value
+
+        # -------------------------------------------------
+        # Final type safety for name fields
+        # -------------------------------------------------
+
+        business_name = clean_text(
+            str(
+                business_name
+                or ""
+            )
+        )
+
+        if not isinstance(
+            business_name_source,
+            str,
+        ):
+            business_name_source = "unknown"
+
+        if isinstance(
+            business_name_confidence,
+            bool,
+        ):
+            business_name_confidence = int(
+                business_name_confidence
+            )
+        elif not isinstance(
+            business_name_confidence,
+            int,
+        ):
+            try:
+                business_name_confidence = int(
+                    business_name_confidence
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                business_name_confidence = 0
 
         if (
             not business_name
@@ -4317,8 +4389,6 @@ async def process_single_url(
 
         normalized_phones: list[str] = []
 
-        # Re-extract phone candidates after determining
-        # likely country, so local numbers can be converted.
         contact_regions = []
 
         for selector in [
@@ -4358,7 +4428,6 @@ async def process_single_url(
                     )
                 )
 
-        # Explicit tel links again.
         for anchor in soup.find_all(
             "a",
             href=True,
@@ -4792,12 +4861,14 @@ async def generate_website(
             phone_value,
         )
 
+        safe_phone_href = html_lib.escape(
+            phone_href,
+            quote=True,
+        )
+
         contact_items += f"""
         <a
-            href="tel:{html_lib.escape(
-                phone_href,
-                quote=True,
-            )}"
+            href="tel:{safe_phone_href}"
             class="button button-dark"
         >
             Call Us
@@ -4810,12 +4881,14 @@ async def generate_website(
             emails[0]
         )
 
+        safe_email_value = html_lib.escape(
+            email_value,
+            quote=True,
+        )
+
         contact_items += f"""
         <a
-            href="mailto:{html_lib.escape(
-                email_value,
-                quote=True,
-            )}"
+            href="mailto:{safe_email_value}"
             class="button button-primary"
         >
             Send an Enquiry
@@ -4852,12 +4925,14 @@ async def generate_website(
 
         if social_url:
 
+            safe_social_url = html_lib.escape(
+                str(social_url),
+                quote=True,
+            )
+
             socials_html += f"""
             <a
-                href="{html_lib.escape(
-                    str(social_url),
-                    quote=True,
-                )}"
+                href="{safe_social_url}"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="social-link"
@@ -5454,7 +5529,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.0.1",
+        "version": "6.0.2",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
@@ -5473,4 +5548,3 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
     )
-```
