@@ -35,6 +35,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  BriefcaseBusiness,
+  MapPin,
+  Gauge,
 } from "lucide-react";
 
 const API_BASE = "https://quicklead-intel.onrender.com";
@@ -46,6 +49,9 @@ type LeadData = {
   domain?: string;
 
   business_name?: string;
+  business_name_source?: string;
+  business_name_confidence?: number;
+
   title?: string;
   meta_description?: string;
 
@@ -84,6 +90,13 @@ type LeadData = {
   locale_signals?: {
     language?: string | null;
     country_hint?: string | null;
+    country_confidence?: string;
+    country_evidence?: {
+      phone_country?: string | null;
+      explicit_country?: string | null;
+      tld_country?: string | null;
+      language_country?: string | null;
+    };
     currency_hints?: string[];
   };
 
@@ -108,6 +121,8 @@ type LeadData = {
     opportunity_reasons?: string[];
     recommendations?: string[];
 
+    best_sales_angle?: string;
+
     service_reason?: string;
 
     problems_found?: string[];
@@ -116,6 +131,11 @@ type LeadData = {
     suggested_price?: string;
 
     personalized_pitch?: string;
+
+    lead_type?: string;
+    lead_type_confidence?: string;
+
+    commercial_intent?: string;
 
     project_value?: {
       min?: number;
@@ -158,11 +178,9 @@ export default function QuickLeadDashboard() {
   const [copySuccess, setCopySuccess] =
     useState(false);
 
-  // =======================================================
-  // HELPERS
-  // =======================================================
-
-  const normalizeUrl = (value: string): string => {
+  const normalizeUrl = (
+    value: string
+  ): string => {
     const trimmed = value.trim();
 
     if (!trimmed) return "";
@@ -174,24 +192,50 @@ export default function QuickLeadDashboard() {
     return `https://${trimmed}`;
   };
 
-  const getDomainName = (value: string): string => {
+  const getDomainName = (
+    value: string
+  ): string => {
     try {
-      const normalized = normalizeUrl(value);
-      const parsed = new URL(normalized);
+      const normalized =
+        normalizeUrl(value);
 
-      return parsed.hostname.replace(/^www\./i, "");
+      const parsed = new URL(
+        normalized
+      );
+
+      return parsed.hostname.replace(
+        /^www\./i,
+        ""
+      );
     } catch {
       return value
-        .replace(/^https?:\/\//i, "")
-        .replace(/^www\./i, "")
+        .replace(
+          /^https?:\/\//i,
+          ""
+        )
+        .replace(
+          /^www\./i,
+          ""
+        )
         .split("/")[0];
     }
   };
 
-  const getScoreColor = (score: number): string => {
-    if (score >= 80) return "text-green-400";
-    if (score >= 60) return "text-blue-400";
-    if (score >= 40) return "text-yellow-400";
+  const getScoreColor = (
+    score: number
+  ): string => {
+    if (score >= 80) {
+      return "text-green-400";
+    }
+
+    if (score >= 60) {
+      return "text-blue-400";
+    }
+
+    if (score >= 40) {
+      return "text-yellow-400";
+    }
+
     return "text-red-400";
   };
 
@@ -231,10 +275,50 @@ export default function QuickLeadDashboard() {
     }
   };
 
+  const getIntentClasses = (
+    intent?: string
+  ): string => {
+    switch (
+      intent?.toUpperCase()
+    ) {
+      case "HIGH":
+        return "bg-green-500/10 text-green-400 border-green-500/20";
+
+      case "MEDIUM":
+        return "bg-yellow-500/10 text-yellow-400 border-yellow-500/20";
+
+      default:
+        return "bg-neutral-800 text-neutral-400 border-neutral-700";
+    }
+  };
+
+  const getLeadTypeClasses = (
+    leadType?: string
+  ): string => {
+    switch (leadType) {
+      case "B2B":
+        return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+
+      case "LOCAL_SERVICE":
+        return "bg-purple-500/10 text-purple-400 border-purple-500/20";
+
+      case "ECOMMERCE":
+        return "bg-orange-500/10 text-orange-400 border-orange-500/20";
+
+      case "SOFTWARE_TECH":
+        return "bg-cyan-500/10 text-cyan-400 border-cyan-500/20";
+
+      default:
+        return "bg-neutral-800 text-neutral-400 border-neutral-700";
+    }
+  };
+
   const getBooleanLabel = (
     value?: boolean
   ): string => {
-    return value ? "Detected" : "Not detected";
+    return value
+      ? "Detected"
+      : "Not detected";
   };
 
   const getBooleanClasses = (
@@ -249,9 +333,14 @@ export default function QuickLeadDashboard() {
     value: string
   ): string => {
     return value
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, (letter) =>
-        letter.toUpperCase()
+      .replace(
+        /_/g,
+        " "
+      )
+      .replace(
+        /\b\w/g,
+        (letter) =>
+          letter.toUpperCase()
       );
   };
 
@@ -260,66 +349,127 @@ export default function QuickLeadDashboard() {
   ): string => {
     return (
       lead.business_name ||
-      getDomainName(lead.url || "") ||
+      getDomainName(
+        lead.url || ""
+      ) ||
       "Unknown Business"
     );
   };
 
-  // =======================================================
-  // BULK DATA
-  // =======================================================
+  const getCountryEvidenceText = (
+    lead: LeadData
+  ): string => {
+    const evidence =
+      lead.locale_signals
+        ?.country_evidence;
+
+    if (!evidence) {
+      return "No country evidence available";
+    }
+
+    const pieces: string[] = [];
+
+    if (
+      evidence.phone_country
+    ) {
+      pieces.push(
+        `Phone: ${evidence.phone_country}`
+      );
+    }
+
+    if (
+      evidence.explicit_country
+    ) {
+      pieces.push(
+        `Page: ${evidence.explicit_country}`
+      );
+    }
+
+    if (
+      evidence.tld_country
+    ) {
+      pieces.push(
+        `Domain: ${evidence.tld_country}`
+      );
+    }
+
+    if (
+      evidence.language_country
+    ) {
+      pieces.push(
+        `Language: ${evidence.language_country}`
+      );
+    }
+
+    return (
+      pieces.join(" • ") ||
+      "No country evidence available"
+    );
+  };
 
   const sortedBulkData = useMemo(() => {
-    return [...bulkData].sort((a, b) => {
-      const aScore =
-        a.intelligence?.opportunity_score ?? -1;
+    return [...bulkData].sort(
+      (a, b) => {
+        const aScore =
+          a.intelligence
+            ?.opportunity_score ??
+          -1;
 
-      const bScore =
-        b.intelligence?.opportunity_score ?? -1;
+        const bScore =
+          b.intelligence
+            ?.opportunity_score ??
+          -1;
 
-      return bScore - aScore;
-    });
-  }, [bulkData]);
-
-  const successfulBulkLeads = useMemo(() => {
-    return bulkData.filter(
-      (item) => item.status === "Success"
+        return bScore - aScore;
+      }
     );
   }, [bulkData]);
+
+  const successfulBulkLeads =
+    useMemo(() => {
+      return bulkData.filter(
+        (item) =>
+          item.status === "Success"
+      );
+    }, [bulkData]);
 
   const hotLeads = useMemo(() => {
     return successfulBulkLeads.filter(
       (item) =>
-        item.intelligence?.opportunity_level ===
+        item.intelligence
+          ?.opportunity_level ===
         "HOT"
     );
   }, [successfulBulkLeads]);
 
-  const highValueLeads = useMemo(() => {
-    return successfulBulkLeads.filter((item) => {
-      const score =
-        item.intelligence?.opportunity_score ?? 0;
+  const highValueLeads =
+    useMemo(() => {
+      return successfulBulkLeads.filter(
+        (item) => {
+          const score =
+            item.intelligence
+              ?.opportunity_score ??
+            0;
 
-      return score >= 55;
-    });
-  }, [successfulBulkLeads]);
+          return score >= 55;
+        }
+      );
+    }, [successfulBulkLeads]);
 
-  const totalPotential = useMemo(() => {
-    return successfulBulkLeads.reduce(
-      (sum, item) => {
-        const min =
-          item.intelligence?.project_value?.min ??
-          0;
+  const totalPotential =
+    useMemo(() => {
+      return successfulBulkLeads.reduce(
+        (sum, item) => {
+          const min =
+            item.intelligence
+              ?.project_value
+              ?.min ?? 0;
 
-        return sum + min;
-      },
-      0
-    );
-  }, [successfulBulkLeads]);
-
-  // =======================================================
-  // SCANNING
-  // =======================================================
+          return sum + min;
+        },
+        0
+      );
+    }, [successfulBulkLeads]);
 
   const handleScan = async (
     e: FormEvent
@@ -333,6 +483,7 @@ export default function QuickLeadDashboard() {
         setError(
           "Please enter a website URL."
         );
+
         return;
       }
 
@@ -342,13 +493,15 @@ export default function QuickLeadDashboard() {
       setPreviewLead(null);
 
       try {
-        const target = normalizeUrl(url);
+        const target =
+          normalizeUrl(url);
 
-        const response = await fetch(
-          `${API_BASE}/api/scan?url=${encodeURIComponent(
-            target
-          )}`
-        );
+        const response =
+          await fetch(
+            `${API_BASE}/api/scan?url=${encodeURIComponent(
+              target
+            )}`
+          );
 
         if (!response.ok) {
           let message =
@@ -363,10 +516,12 @@ export default function QuickLeadDashboard() {
               payload?.message ||
               message;
           } catch {
-            // Ignore parsing errors.
+            // Ignore.
           }
 
-          throw new Error(message);
+          throw new Error(
+            message
+          );
         }
 
         const result: LeadData =
@@ -390,12 +545,15 @@ export default function QuickLeadDashboard() {
       setError(
         "Please enter at least one URL."
       );
+
       return;
     }
 
     const urlList = bulkUrls
       .split("\n")
-      .map((item) => item.trim())
+      .map((item) =>
+        item.trim()
+      )
       .filter(Boolean)
       .slice(0, 50);
 
@@ -403,6 +561,7 @@ export default function QuickLeadDashboard() {
       setError(
         "Please enter at least one valid URL."
       );
+
       return;
     }
 
@@ -412,21 +571,24 @@ export default function QuickLeadDashboard() {
 
     try {
       const normalizedUrls =
-        urlList.map(normalizeUrl);
+        urlList.map(
+          normalizeUrl
+        );
 
-      const response = await fetch(
-        `${API_BASE}/api/bulk-scan`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify(
-            normalizedUrls
-          ),
-        }
-      );
+      const response =
+        await fetch(
+          `${API_BASE}/api/bulk-scan`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify(
+              normalizedUrls
+            ),
+          }
+        );
 
       if (!response.ok) {
         let message =
@@ -441,17 +603,21 @@ export default function QuickLeadDashboard() {
             payload?.message ||
             message;
         } catch {
-          // Ignore parsing errors.
+          // Ignore.
         }
 
-        throw new Error(message);
+        throw new Error(
+          message
+        );
       }
 
       const result =
         await response.json();
 
       setBulkData(
-        Array.isArray(result?.results)
+        Array.isArray(
+          result?.results
+        )
           ? result.results
           : []
       );
@@ -466,91 +632,100 @@ export default function QuickLeadDashboard() {
     }
   };
 
-  // =======================================================
-  // WEBSITE GENERATOR
-  // =======================================================
+  const generateWebsiteForLead =
+    async (
+      lead: LeadData | null
+    ): Promise<void> => {
+      if (!lead) return;
 
-  const generateWebsiteForLead = async (
-    lead: LeadData | null
-  ): Promise<void> => {
-    if (!lead) return;
-
-    setGeneratingWebsite(true);
-    setError("");
-    setPreviewLead(lead);
-
-    try {
-      const response = await fetch(
-        `${API_BASE}/api/generate-website`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify(lead),
-        }
+      setGeneratingWebsite(
+        true
       );
 
-      if (!response.ok) {
-        let message =
-          "Failed to generate website preview.";
+      setError("");
+      setPreviewLead(
+        lead
+      );
 
-        try {
-          const payload =
-            await response.json();
+      try {
+        const response =
+          await fetch(
+            `${API_BASE}/api/generate-website`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
+              body: JSON.stringify(
+                lead
+              ),
+            }
+          );
 
-          message =
-            payload?.detail ||
-            payload?.message ||
-            message;
-        } catch {
-          // Ignore parsing errors.
+        if (!response.ok) {
+          let message =
+            "Failed to generate website preview.";
+
+          try {
+            const payload =
+              await response.json();
+
+            message =
+              payload?.detail ||
+              payload?.message ||
+              message;
+          } catch {
+            // Ignore.
+          }
+
+          throw new Error(
+            message
+          );
         }
 
-        throw new Error(message);
-      }
+        const result =
+          await response.json();
 
-      const result =
-        await response.json();
+        if (!result?.html) {
+          throw new Error(
+            "The website generator returned no preview."
+          );
+        }
 
-      if (!result?.html) {
-        throw new Error(
-          "The website generator returned no preview."
+        setWebsitePreview(
+          result.html
+        );
+      } catch (err: unknown) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Failed to generate the website preview."
+        );
+
+        setPreviewLead(
+          null
+        );
+      } finally {
+        setGeneratingWebsite(
+          false
         );
       }
-
-      setWebsitePreview(
-        result.html
-      );
-    } catch (err: unknown) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Failed to generate the website preview."
-      );
-
-      setPreviewLead(null);
-    } finally {
-      setGeneratingWebsite(false);
-    }
-  };
-
-  // =======================================================
-  // OUTREACH
-  // =======================================================
+    };
 
   const copyOutreach = async (
     lead: LeadData | null
   ): Promise<void> => {
     const pitch =
       lead?.intelligence
-        ?.personalized_pitch || "";
+        ?.personalized_pitch ||
+      "";
 
     if (!pitch) {
       setError(
         "No outreach message is available for this lead."
       );
+
       return;
     }
 
@@ -559,11 +734,17 @@ export default function QuickLeadDashboard() {
         pitch
       );
 
-      setCopySuccess(true);
+      setCopySuccess(
+        true
+      );
 
-      window.setTimeout(() => {
-        setCopySuccess(false);
-      }, 1800);
+      window.setTimeout(
+        () =>
+          setCopySuccess(
+            false
+          ),
+        1800
+      );
     } catch {
       setError(
         "Could not copy the outreach message."
@@ -571,12 +752,12 @@ export default function QuickLeadDashboard() {
     }
   };
 
-  // =======================================================
-  // EXPORT
-  // =======================================================
-
   const exportRowsAsCsv = (
-    rows: (string | number | boolean)[][]
+    rows: (
+      | string
+      | number
+      | boolean
+    )[][]
   ): void => {
     const csvContent =
       "data:text/csv;charset=utf-8," +
@@ -584,9 +765,10 @@ export default function QuickLeadDashboard() {
         .map((row) =>
           row
             .map((cell) => {
-              const value = String(
-                cell ?? ""
-              );
+              const value =
+                String(
+                  cell ?? ""
+                );
 
               return `"${value.replace(
                 /"/g,
@@ -598,10 +780,14 @@ export default function QuickLeadDashboard() {
         .join("\n");
 
     const encodedUri =
-      encodeURI(csvContent);
+      encodeURI(
+        csvContent
+      );
 
     const link =
-      document.createElement("a");
+      document.createElement(
+        "a"
+      );
 
     link.setAttribute(
       "href",
@@ -613,73 +799,112 @@ export default function QuickLeadDashboard() {
       "quicklead_intel_report.csv"
     );
 
-    document.body.appendChild(link);
+    document.body.appendChild(
+      link
+    );
 
     link.click();
 
-    document.body.removeChild(link);
+    document.body.removeChild(
+      link
+    );
   };
 
   const exportCSV = (): void => {
-    if (mode === "single" && data) {
+    if (
+      mode === "single" &&
+      data
+    ) {
       const intel =
-        data.intelligence || {};
+        data.intelligence ||
+        {};
 
       const rows: (
         | string
         | number
         | boolean
       )[][] = [
-        ["Metric", "Value"],
-
-        ["URL", data.url || ""],
-
+        [
+          "Metric",
+          "Value",
+        ],
+        [
+          "URL",
+          data.url || "",
+        ],
         [
           "Domain",
           data.domain || "",
         ],
-
         [
           "Business Name",
           data.business_name ||
-            getBusinessDisplayName(data),
+            getBusinessDisplayName(
+              data
+            ),
         ],
-
+        [
+          "Business Name Source",
+          data.business_name_source ||
+            "",
+        ],
+        [
+          "Business Name Confidence",
+          data.business_name_confidence ??
+            "",
+        ],
         [
           "Page Title",
           data.title || "",
         ],
-
         [
           "Website Health Score",
-          intel.website_score ?? "",
+          intel.website_score ??
+            "",
         ],
-
         [
           "SEO Score",
           intel.seo_score ?? "",
         ],
-
         [
           "Conversion Score",
-          intel.conversion_score ?? "",
+          intel.conversion_score ??
+            "",
         ],
-
         [
           "Technical Score",
-          intel.technical_score ?? "",
+          intel.technical_score ??
+            "",
         ],
-
         [
           "Sales Opportunity Score",
-          intel.opportunity_score ?? "",
+          intel.opportunity_score ??
+            "",
         ],
-
         [
           "Opportunity Level",
-          intel.opportunity_level ?? "",
+          intel.opportunity_level ??
+            "",
         ],
-
+        [
+          "Lead Type",
+          intel.lead_type || "",
+        ],
+        [
+          "Lead Type Confidence",
+          intel.lead_type_confidence ||
+            "",
+        ],
+        [
+          "Commercial Intent",
+          intel.commercial_intent ||
+            "",
+        ],
+        [
+          "Best Sales Angle",
+          intel.best_sales_angle ||
+            "",
+        ],
         [
           "Opportunity Reasons",
           (
@@ -687,7 +912,6 @@ export default function QuickLeadDashboard() {
             []
           ).join(" | "),
         ],
-
         [
           "Recommendations",
           (
@@ -695,31 +919,26 @@ export default function QuickLeadDashboard() {
             []
           ).join(" | "),
         ],
-
         [
           "Recommended Service",
           intel.suggested_offer ||
             "",
         ],
-
         [
           "Suggested Price",
           intel.suggested_price ||
             "",
         ],
-
         [
           "Project Min",
-          intel.project_value?.min ??
-            "",
+          intel.project_value
+            ?.min ?? "",
         ],
-
         [
           "Project Max",
-          intel.project_value?.max ??
-            "",
+          intel.project_value
+            ?.max ?? "",
         ],
-
         [
           "Problems Found",
           (
@@ -727,25 +946,33 @@ export default function QuickLeadDashboard() {
             []
           ).join(" | "),
         ],
-
         [
           "Personalized Pitch",
           intel.personalized_pitch ||
             "",
         ],
-
         [
           "Language",
           data.locale_signals
             ?.language || "",
         ],
-
         [
           "Country Hint",
           data.locale_signals
             ?.country_hint || "",
         ],
-
+        [
+          "Country Confidence",
+          data.locale_signals
+            ?.country_confidence ||
+            "",
+        ],
+        [
+          "Country Evidence",
+          getCountryEvidenceText(
+            data
+          ),
+        ],
         [
           "Currency Hints",
           (
@@ -754,39 +981,33 @@ export default function QuickLeadDashboard() {
             []
           ).join(", "),
         ],
-
         [
           "Emails",
           (
             data.emails || []
           ).join(", "),
         ],
-
         [
           "Phones",
           (
             data.phones || []
           ).join(", "),
         ],
-
         [
           "LinkedIn",
           data.socials
             ?.linkedin || "",
         ],
-
         [
           "Twitter/X",
-          data.socials?.twitter ||
-            "",
+          data.socials
+            ?.twitter || "",
         ],
-
         [
           "Instagram",
           data.socials
             ?.instagram || "",
         ],
-
         [
           "Facebook",
           data.socials
@@ -824,7 +1045,10 @@ export default function QuickLeadDashboard() {
         }
       );
 
-      exportRowsAsCsv(rows);
+      exportRowsAsCsv(
+        rows
+      );
+
       return;
     }
 
@@ -845,6 +1069,9 @@ export default function QuickLeadDashboard() {
           "Website Health",
           "Sales Opportunity",
           "Opportunity Level",
+          "Lead Type",
+          "Commercial Intent",
+          "Best Sales Angle",
           "Recommended Service",
           "Suggested Price",
           "Project Min",
@@ -853,14 +1080,22 @@ export default function QuickLeadDashboard() {
           "Phone",
           "Email",
           "Country",
+          "Country Confidence",
         ],
       ];
 
       sortedBulkData.forEach(
-        (item, index) => {
-          if (item.status === "Success") {
+        (
+          item,
+          index
+        ) => {
+          if (
+            item.status ===
+            "Success"
+          ) {
             const intel =
-              item.intelligence || {};
+              item.intelligence ||
+              {};
 
             rows.push([
               index + 1,
@@ -876,9 +1111,15 @@ export default function QuickLeadDashboard() {
                 "",
               intel.opportunity_level ??
                 "",
-              intel.suggested_offer ??
+              intel.lead_type ||
                 "",
-              intel.suggested_price ??
+              intel.commercial_intent ||
+                "",
+              intel.best_sales_angle ||
+                "",
+              intel.suggested_offer ||
+                "",
+              intel.suggested_price ||
                 "",
               intel.project_value
                 ?.min ?? "",
@@ -888,12 +1129,17 @@ export default function QuickLeadDashboard() {
                 intel.opportunity_reasons ||
                 []
               ).join(" | "),
-              item.phones?.[0] ||
+              item.phones
+                ?.join(" | ") ||
                 "",
-              item.emails?.[0] ||
+              item.emails
+                ?.join(" | ") ||
                 "",
               item.locale_signals
                 ?.country_hint ||
+                "",
+              item.locale_signals
+                ?.country_confidence ||
                 "",
             ]);
           } else {
@@ -909,8 +1155,12 @@ export default function QuickLeadDashboard() {
               "",
               "",
               "",
+              "",
+              "",
+              "",
               item.error ||
                 "Scan failed",
+              "",
               "",
               "",
               "",
@@ -919,13 +1169,11 @@ export default function QuickLeadDashboard() {
         }
       );
 
-      exportRowsAsCsv(rows);
+      exportRowsAsCsv(
+        rows
+      );
     }
   };
-
-  // =======================================================
-  // SCORE CARD
-  // =======================================================
 
   const renderScoreCard = (
     label: string,
@@ -959,10 +1207,6 @@ export default function QuickLeadDashboard() {
     );
   };
 
-  // =======================================================
-  // OPPORTUNITY BADGE
-  // =======================================================
-
   const renderOpportunityBadge = (
     lead: LeadData
   ): ReactNode => {
@@ -986,9 +1230,52 @@ export default function QuickLeadDashboard() {
     );
   };
 
-  // =======================================================
-  // LEAD DETAILS
-  // =======================================================
+  const renderClassificationBadges = (
+    lead: LeadData
+  ): ReactNode => {
+    const intel =
+      lead.intelligence || {};
+
+    return (
+      <div className="flex flex-wrap gap-2 mt-4">
+        {intel.lead_type && (
+          <span
+            className={`inline-flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${getLeadTypeClasses(
+              intel.lead_type
+            )}`}
+          >
+            <BriefcaseBusiness className="w-3.5 h-3.5" />
+            {getPrettyKey(
+              intel.lead_type
+            )}
+          </span>
+        )}
+
+        {intel.commercial_intent && (
+          <span
+            className={`inline-flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${getIntentClasses(
+              intel.commercial_intent
+            )}`}
+          >
+            <Gauge className="w-3.5 h-3.5" />
+            Commercial Intent:{" "}
+            {intel.commercial_intent}
+          </span>
+        )}
+
+        {lead.locale_signals
+          ?.country_hint && (
+          <span className="inline-flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-neutral-300">
+            <MapPin className="w-3.5 h-3.5" />
+            {lead.locale_signals.country_hint}
+            {lead.locale_signals.country_confidence
+              ? ` • ${lead.locale_signals.country_confidence}`
+              : ""}
+          </span>
+        )}
+      </div>
+    );
+  };
 
   const renderLeadDetails = (
     lead: LeadData,
@@ -1042,7 +1329,11 @@ export default function QuickLeadDashboard() {
                   "Website analysis complete"}
               </p>
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-3 text-xs text-neutral-500">
+              {renderClassificationBadges(
+                lead
+              )}
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-4 text-xs text-neutral-500">
                 <span className="flex items-center gap-1.5">
                   <Globe className="w-3.5 h-3.5" />
 
@@ -1058,6 +1349,21 @@ export default function QuickLeadDashboard() {
                     <span className="text-neutral-300">
                       {country}
                     </span>
+
+                    {lead
+                      .locale_signals
+                      ?.country_confidence && (
+                      <span className="text-neutral-500">
+                        {" "}
+                        (
+                        {
+                          lead
+                            .locale_signals
+                            .country_confidence
+                        }
+                        )
+                      </span>
+                    )}
                   </span>
                 )}
 
@@ -1219,10 +1525,102 @@ export default function QuickLeadDashboard() {
             </div>
 
             <p className="text-sm text-neutral-300 leading-relaxed">
-              {intel.opportunity_reasons?.[0] ||
+              {intel.best_sales_angle ||
+                intel.opportunity_reasons?.[0] ||
                 intel.service_reason ||
                 "No specific sales angle detected."}
             </p>
+          </div>
+        </div>
+
+        {/* SALES CLASSIFICATION */}
+
+        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6">
+          <div className="flex items-center gap-2 mb-5">
+            <BriefcaseBusiness className="w-5 h-5 text-blue-400" />
+
+            <div>
+              <h3 className="font-semibold text-neutral-100">
+                Prospect Classification
+              </h3>
+
+              <p className="text-xs text-neutral-500 mt-0.5">
+                QuickLead's commercial classification for outreach prioritization.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Lead Type
+              </p>
+
+              <p className="text-base font-semibold text-neutral-200 mt-2">
+                {intel.lead_type
+                  ? getPrettyKey(
+                      intel.lead_type
+                    )
+                  : "Unknown"}
+              </p>
+
+              {intel.lead_type_confidence && (
+                <p className="text-xs text-neutral-500 mt-1">
+                  Confidence:{" "}
+                  {intel.lead_type_confidence}
+                </p>
+              )}
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Commercial Intent
+              </p>
+
+              <span
+                className={`inline-flex mt-2 border px-2 py-1 rounded-md text-xs font-semibold ${getIntentClasses(
+                  intel.commercial_intent
+                )}`}
+              >
+                {intel.commercial_intent ||
+                  "Unknown"}
+              </span>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Country
+              </p>
+
+              <p className="text-base font-semibold text-neutral-200 mt-2">
+                {country ||
+                  "Unknown"}
+              </p>
+
+              <p className="text-xs text-neutral-500 mt-1">
+                {lead
+                  .locale_signals
+                  ?.country_confidence ||
+                  "No confidence score"}
+              </p>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Business Name Confidence
+              </p>
+
+              <p className="text-2xl font-bold text-blue-400 mt-2">
+                {lead.business_name_confidence ??
+                  0}
+              </p>
+
+              <p className="text-xs text-neutral-500 mt-1">
+                Source:{" "}
+                {lead.business_name_source ||
+                  "Unknown"}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1248,7 +1646,10 @@ export default function QuickLeadDashboard() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {intel.recommendations.map(
-                  (recommendation, index) => (
+                  (
+                    recommendation,
+                    index
+                  ) => (
                     <div
                       key={`${recommendation}-${index}`}
                       className="bg-neutral-950 border border-neutral-800 rounded-lg p-4 flex items-start gap-3"
@@ -1288,7 +1689,8 @@ export default function QuickLeadDashboard() {
             </div>
 
             <div className="text-sm font-bold text-blue-400">
-              {intel.opportunity_score ?? 0}
+              {intel.opportunity_score ??
+                0}
               /100
             </div>
           </div>
@@ -1298,7 +1700,10 @@ export default function QuickLeadDashboard() {
             0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {intel.opportunity_reasons.map(
-                (reason, index) => (
+                (
+                  reason,
+                  index
+                ) => (
                   <div
                     key={`${reason}-${index}`}
                     className="bg-neutral-950 border border-neutral-800 rounded-lg p-4 flex items-start gap-3"
@@ -1329,7 +1734,8 @@ export default function QuickLeadDashboard() {
           <button
             onClick={() =>
               setShowPitch(
-                (value) => !value
+                (value) =>
+                  !value
               )
             }
             className="w-full px-6 py-4 flex items-center justify-between hover:bg-blue-500/5 transition-colors"
@@ -1373,7 +1779,6 @@ export default function QuickLeadDashboard() {
                     className="text-xs bg-neutral-800 hover:bg-neutral-700 text-white px-3 py-2 rounded-md flex items-center gap-2"
                   >
                     <Copy className="w-3.5 h-3.5" />
-
                     Copy Message
                   </button>
                 </div>
@@ -1404,7 +1809,10 @@ export default function QuickLeadDashboard() {
             0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               {intel.problems_found.map(
-                (problem, index) => (
+                (
+                  problem,
+                  index
+                ) => (
                   <div
                     key={`${problem}-${index}`}
                     className="text-sm text-neutral-300 bg-neutral-950/60 border border-red-900/30 rounded-lg p-3"
@@ -1431,7 +1839,8 @@ export default function QuickLeadDashboard() {
           <button
             onClick={() =>
               setShowTechnical(
-                (value) => !value
+                (value) =>
+                  !value
               )
             }
             className="w-full px-6 py-4 flex items-center justify-between hover:bg-neutral-800/50 transition-colors"
@@ -1485,6 +1894,21 @@ export default function QuickLeadDashboard() {
 
                   <div>
                     <p className="text-xs text-neutral-500 uppercase tracking-wider mb-1">
+                      Detection
+                    </p>
+
+                    <p className="text-sm text-neutral-300">
+                      {lead.business_name_source ||
+                        "Unknown"}
+
+                      {typeof lead.business_name_confidence ===
+                        "number" &&
+                        ` • ${lead.business_name_confidence}% confidence`}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-neutral-500 uppercase tracking-wider mb-1">
                       Page Title
                     </p>
 
@@ -1514,7 +1938,10 @@ export default function QuickLeadDashboard() {
                     lead.h1_tags.length > 0 ? (
                       <div className="space-y-1">
                         {lead.h1_tags.map(
-                          (h1, index) => (
+                          (
+                            h1,
+                            index
+                          ) => (
                             <div
                               key={`${h1}-${index}`}
                               className="text-xs bg-neutral-900 border border-neutral-800 px-2.5 py-2 rounded text-neutral-300"
@@ -1579,7 +2006,10 @@ export default function QuickLeadDashboard() {
                     lead.emails.length > 0 ? (
                       <div className="space-y-1">
                         {lead.emails.map(
-                          (email, index) => (
+                          (
+                            email,
+                            index
+                          ) => (
                             <div
                               key={`${email}-${index}`}
                               className="text-xs bg-neutral-900 border border-neutral-800 px-3 py-2 rounded flex items-center gap-2"
@@ -1607,7 +2037,10 @@ export default function QuickLeadDashboard() {
                     lead.phones.length > 0 ? (
                       <div className="space-y-1">
                         {lead.phones.map(
-                          (phone, index) => (
+                          (
+                            phone,
+                            index
+                          ) => (
                             <div
                               key={`${phone}-${index}`}
                               className="text-xs bg-neutral-900 border border-neutral-800 px-3 py-2 rounded flex items-center gap-2"
@@ -1636,7 +2069,10 @@ export default function QuickLeadDashboard() {
                         Object.entries(
                           lead.socials
                         ).map(
-                          ([platform, link]) =>
+                          ([
+                            platform,
+                            link,
+                          ]) =>
                             link ? (
                               <a
                                 key={platform}
@@ -1657,7 +2093,9 @@ export default function QuickLeadDashboard() {
                       Object.values(
                         lead.socials
                       ).every(
-                        (value) => !value
+                        (
+                          value
+                        ) => !value
                       )) && (
                       <p className="text-xs text-neutral-500 italic">
                         No social profiles detected
@@ -1722,13 +2160,20 @@ export default function QuickLeadDashboard() {
                           ?.has_conversion_link,
                       ],
                     ].map(
-                      ([label, value]) => (
+                      ([
+                        label,
+                        value,
+                      ]) => (
                         <div
-                          key={String(label)}
+                          key={String(
+                            label
+                          )}
                           className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded"
                         >
                           <span className="text-sm text-neutral-300">
-                            {String(label)}
+                            {String(
+                              label
+                            )}
                           </span>
 
                           <span
@@ -1766,7 +2211,10 @@ export default function QuickLeadDashboard() {
                       Object.entries(
                         lead.tech_stack
                       ).map(
-                        ([tech, present]) => (
+                        ([
+                          tech,
+                          present,
+                        ]) => (
                           <div
                             key={tech}
                             className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded"
@@ -1808,7 +2256,10 @@ export default function QuickLeadDashboard() {
                       Object.entries(
                         lead.trackers
                       ).map(
-                        ([tracker, present]) => (
+                        ([
+                          tracker,
+                          present,
+                        ]) => (
                           <div
                             key={tracker}
                             className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded"
@@ -1846,46 +2297,74 @@ export default function QuickLeadDashboard() {
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded">
-                      <span className="text-sm text-neutral-300">
-                        Country Hint
-                      </span>
+                    <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-neutral-300">
+                          Country
+                        </span>
 
-                      <span className="text-xs text-neutral-400">
-                        {lead.locale_signals
-                          ?.country_hint ||
+                        <span className="text-xs font-semibold text-neutral-200">
+                          {country ||
+                            "Unknown"}
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-neutral-500 mt-1">
+                        Confidence:{" "}
+                        {lead
+                          .locale_signals
+                          ?.country_confidence ||
                           "Unknown"}
-                      </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded">
-                      <span className="text-sm text-neutral-300">
-                        Language
-                      </span>
+                    <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-neutral-300">
+                          Language
+                        </span>
 
-                      <span className="text-xs text-neutral-400">
-                        {lead.locale_signals
-                          ?.language ||
-                          "Unknown"}
-                      </span>
+                        <span className="text-xs text-neutral-400">
+                          {lead
+                            .locale_signals
+                            ?.language ||
+                            "Unknown"}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between bg-neutral-900 border border-neutral-800 px-3 py-2 rounded">
-                      <span className="text-sm text-neutral-300">
-                        Currency Hints
-                      </span>
+                    <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
+                      <p className="text-xs text-neutral-500 uppercase tracking-wider mb-2">
+                        Evidence
+                      </p>
 
-                      <span className="text-xs text-neutral-400 text-right max-w-[55%]">
-                        {lead.locale_signals
-                          ?.currency_hints &&
-                        lead.locale_signals
-                          .currency_hints
-                          .length > 0
-                          ? lead.locale_signals.currency_hints.join(
-                              ", "
-                            )
-                          : "None detected"}
-                      </span>
+                      <p className="text-xs text-neutral-300 leading-relaxed">
+                        {getCountryEvidenceText(
+                          lead
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-neutral-300">
+                          Currency Hints
+                        </span>
+
+                        <span className="text-xs text-neutral-400 text-right">
+                          {lead
+                            .locale_signals
+                            ?.currency_hints &&
+                          lead
+                            .locale_signals
+                            .currency_hints
+                            .length > 0
+                            ? lead.locale_signals.currency_hints.join(
+                                ", "
+                              )
+                            : "None detected"}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1988,8 +2467,6 @@ export default function QuickLeadDashboard() {
           )}
         </div>
 
-        {/* STATUS */}
-
         {!isModal && (
           <div className="flex items-center justify-between text-xs text-neutral-600 px-1">
             <span>
@@ -2001,17 +2478,13 @@ export default function QuickLeadDashboard() {
             </span>
 
             <span>
-              Engine: Global Sales Intelligence
+              Engine: Global Sales Intelligence V5
             </span>
           </div>
         )}
       </div>
     );
   };
-
-  // =======================================================
-  // MAIN UI
-  // =======================================================
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 p-4 md:p-8 font-sans">
@@ -2184,12 +2657,13 @@ export default function QuickLeadDashboard() {
                   className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                   <Download className="w-4 h-4" />
-
                   Export Lead
                 </button>
               </div>
 
-              {renderLeadDetails(data)}
+              {renderLeadDetails(
+                data
+              )}
             </div>
           )}
 
@@ -2199,9 +2673,8 @@ export default function QuickLeadDashboard() {
           bulkData.length > 0 && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-              {/* BULK METRICS */}
-
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+
                 <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
                   <p className="text-xs text-neutral-500 uppercase tracking-wider">
                     Leads
@@ -2238,9 +2711,7 @@ export default function QuickLeadDashboard() {
                   </p>
 
                   <p className="text-3xl font-bold text-blue-400 mt-2">
-                    {
-                      successfulBulkLeads.length
-                    }
+                    {successfulBulkLeads.length}
                   </p>
                 </div>
 
@@ -2254,9 +2725,8 @@ export default function QuickLeadDashboard() {
                     {totalPotential.toLocaleString()}
                   </p>
                 </div>
-              </div>
 
-              {/* TABLE HEADER */}
+              </div>
 
               <div className="flex flex-col md:flex-row justify-between md:items-center gap-3 border-b border-neutral-800 pb-4">
                 <div>
@@ -2274,12 +2744,9 @@ export default function QuickLeadDashboard() {
                   className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                   <Download className="w-4 h-4" />
-
                   Export Leads
                 </button>
               </div>
-
-              {/* TABLE */}
 
               <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden">
                 <div className="overflow-x-auto">
@@ -2292,6 +2759,14 @@ export default function QuickLeadDashboard() {
 
                         <th className="p-3">
                           Business
+                        </th>
+
+                        <th className="p-3">
+                          Type
+                        </th>
+
+                        <th className="p-3">
+                          Intent
                         </th>
 
                         <th className="p-3">
@@ -2311,7 +2786,7 @@ export default function QuickLeadDashboard() {
                         </th>
 
                         <th className="p-3">
-                          Contact
+                          Country
                         </th>
 
                         <th className="p-3">
@@ -2322,7 +2797,10 @@ export default function QuickLeadDashboard() {
 
                     <tbody className="divide-y divide-neutral-800 text-sm">
                       {sortedBulkData.map(
-                        (item, index) => {
+                        (
+                          item,
+                          index
+                        ) => {
                           const intel =
                             item.intelligence ||
                             {};
@@ -2340,7 +2818,7 @@ export default function QuickLeadDashboard() {
                                 </span>
                               </td>
 
-                              <td className="p-3 min-w-[230px]">
+                              <td className="p-3 min-w-[220px]">
                                 {item.status ===
                                 "Success" ? (
                                   <button
@@ -2357,7 +2835,7 @@ export default function QuickLeadDashboard() {
                                       )}
                                     </div>
 
-                                    <div className="text-xs text-neutral-500 truncate max-w-[230px] mt-1">
+                                    <div className="text-xs text-neutral-500 truncate max-w-[220px] mt-1">
                                       {item.domain ||
                                         getDomainName(
                                           item.url ||
@@ -2375,6 +2853,45 @@ export default function QuickLeadDashboard() {
                                       Scan failed
                                     </div>
                                   </div>
+                                )}
+                              </td>
+
+                              <td className="p-3">
+                                {item.status ===
+                                "Success" ? (
+                                  <span
+                                    className={`inline-flex border px-2 py-1 rounded-md text-[10px] font-semibold ${getLeadTypeClasses(
+                                      intel.lead_type
+                                    )}`}
+                                  >
+                                    {intel.lead_type
+                                      ? getPrettyKey(
+                                          intel.lead_type
+                                        )
+                                      : "Unknown"}
+                                  </span>
+                                ) : (
+                                  <span className="text-neutral-600">
+                                    —
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="p-3">
+                                {item.status ===
+                                "Success" ? (
+                                  <span
+                                    className={`inline-flex border px-2 py-1 rounded-md text-[10px] font-semibold ${getIntentClasses(
+                                      intel.commercial_intent
+                                    )}`}
+                                  >
+                                    {intel.commercial_intent ||
+                                      "Unknown"}
+                                  </span>
+                                ) : (
+                                  <span className="text-neutral-600">
+                                    —
+                                  </span>
                                 )}
                               </td>
 
@@ -2412,10 +2929,8 @@ export default function QuickLeadDashboard() {
                                         intel.opportunity_level
                                       )}`}
                                     >
-                                      {
-                                        intel.opportunity_level ||
-                                        "UNKNOWN"
-                                      }
+                                      {intel.opportunity_level ||
+                                        "UNKNOWN"}
                                     </span>
                                   </div>
                                 ) : (
@@ -2425,7 +2940,7 @@ export default function QuickLeadDashboard() {
                                 )}
                               </td>
 
-                              <td className="p-3 max-w-[230px]">
+                              <td className="p-3 max-w-[220px]">
                                 <div className="text-xs text-neutral-300 line-clamp-2">
                                   {intel.suggested_offer ||
                                     "—"}
@@ -2439,40 +2954,19 @@ export default function QuickLeadDashboard() {
                                 </span>
                               </td>
 
-                              <td className="p-3 min-w-[175px]">
-                                <div className="flex flex-col gap-1">
-                                  {item.phones?.[0] && (
-                                    <span className="text-xs text-neutral-400 flex items-center gap-1.5">
-                                      <Phone className="w-3 h-3 text-blue-400" />
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="flex flex-col">
+                                  <span className="text-xs text-neutral-300">
+                                    {item.locale_signals
+                                      ?.country_hint ||
+                                      "Unknown"}
+                                  </span>
 
-                                      {
-                                        item
-                                          .phones[0]
-                                      }
-                                    </span>
-                                  )}
-
-                                  {item.emails?.[0] && (
-                                    <span className="text-xs text-neutral-400 flex items-center gap-1.5 truncate max-w-[175px]">
-                                      <Mail className="w-3 h-3 text-purple-400" />
-
-                                      {
-                                        item
-                                          .emails[0]
-                                      }
-                                    </span>
-                                  )}
-
-                                  {!item
-                                    .phones
-                                    ?.length &&
-                                    !item
-                                      .emails
-                                      ?.length && (
-                                      <span className="text-xs text-neutral-600">
-                                        No contact
-                                      </span>
-                                    )}
+                                  <span className="text-[10px] text-neutral-600">
+                                    {item.locale_signals
+                                      ?.country_confidence ||
+                                      ""}
+                                  </span>
                                 </div>
                               </td>
 
@@ -2488,7 +2982,6 @@ export default function QuickLeadDashboard() {
                                     className="bg-neutral-800 hover:bg-blue-600 text-white px-3 py-2 rounded-md text-xs flex items-center gap-1.5 transition-colors"
                                   >
                                     <Eye className="w-3.5 h-3.5" />
-
                                     Open
                                   </button>
                                 ) : (
@@ -2527,11 +3020,12 @@ export default function QuickLeadDashboard() {
           )}
       </div>
 
-      {/* WEBSITE PREVIEW MODAL */}
+      {/* WEBSITE PREVIEW */}
 
       {websitePreview && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm p-2 md:p-5">
           <div className="w-full h-full bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden flex flex-col">
+
             <div className="h-14 shrink-0 border-b border-neutral-800 flex items-center justify-between px-3 md:px-4">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-blue-400" />
@@ -2600,6 +3094,7 @@ export default function QuickLeadDashboard() {
       {selectedLead && (
         <div className="fixed inset-0 z-40 bg-black/75 backdrop-blur-sm p-3 md:p-6 overflow-y-auto">
           <div className="max-w-7xl mx-auto">
+
             <div className="flex justify-end mb-2">
               <button
                 onClick={() =>
@@ -2620,6 +3115,7 @@ export default function QuickLeadDashboard() {
                 true
               )}
             </div>
+
           </div>
         </div>
       )}
