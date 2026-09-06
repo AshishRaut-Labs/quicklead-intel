@@ -89,15 +89,23 @@ type LeadData = {
 
   locale_signals?: {
     language?: string | null;
+
     country_hint?: string | null;
     country_confidence?: string;
+
     country_evidence?: {
       phone_country?: string | null;
       explicit_country?: string | null;
       tld_country?: string | null;
       language_country?: string | null;
+      language_country_confidence?: string;
     };
+
     currency_hints?: string[];
+
+    primary_currency?: string | null;
+    primary_currency_symbol?: string | null;
+    currency_source?: string;
   };
 
   business_signals?: {
@@ -116,7 +124,12 @@ type LeadData = {
     technical_score?: number;
 
     opportunity_score?: number;
-    opportunity_level?: "HOT" | "HIGH" | "MEDIUM" | "LOW" | string;
+    opportunity_level?:
+      | "HOT"
+      | "HIGH"
+      | "MEDIUM"
+      | "LOW"
+      | string;
 
     opportunity_reasons?: string[];
     recommendations?: string[];
@@ -129,6 +142,7 @@ type LeadData = {
 
     suggested_offer?: string;
     suggested_price?: string;
+    suggested_price_localized?: string;
 
     personalized_pitch?: string;
 
@@ -140,6 +154,16 @@ type LeadData = {
     project_value?: {
       min?: number;
       max?: number;
+      currency?: string;
+    };
+
+    localized_project_value?: {
+      currency?: string;
+      symbol?: string;
+      min?: number;
+      max?: number;
+      formatted?: string;
+      source?: string;
     };
   };
 };
@@ -149,13 +173,20 @@ type BulkLead = LeadData;
 export default function QuickLeadDashboard() {
   const [url, setUrl] = useState("");
   const [bulkUrls, setBulkUrls] = useState("");
-  const [mode, setMode] = useState<Mode>("single");
+  const [mode, setMode] =
+    useState<Mode>("single");
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [loading, setLoading] =
+    useState(false);
 
-  const [data, setData] = useState<LeadData | null>(null);
-  const [bulkData, setBulkData] = useState<BulkLead[]>([]);
+  const [error, setError] =
+    useState("");
+
+  const [data, setData] =
+    useState<LeadData | null>(null);
+
+  const [bulkData, setBulkData] =
+    useState<BulkLead[]>([]);
 
   const [selectedLead, setSelectedLead] =
     useState<BulkLead | null>(null);
@@ -181,11 +212,16 @@ export default function QuickLeadDashboard() {
   const normalizeUrl = (
     value: string
   ): string => {
-    const trimmed = value.trim();
+    const trimmed =
+      value.trim();
 
     if (!trimmed) return "";
 
-    if (/^https?:\/\//i.test(trimmed)) {
+    if (
+      /^https?:\/\//i.test(
+        trimmed
+      )
+    ) {
       return trimmed;
     }
 
@@ -313,6 +349,35 @@ export default function QuickLeadDashboard() {
     }
   };
 
+  const getCurrencyClasses = (
+    currency?: string
+  ): string => {
+    switch (
+      currency?.toUpperCase()
+    ) {
+      case "INR":
+        return "bg-orange-500/10 text-orange-300 border-orange-500/20";
+
+      case "GBP":
+        return "bg-blue-500/10 text-blue-300 border-blue-500/20";
+
+      case "EUR":
+        return "bg-cyan-500/10 text-cyan-300 border-cyan-500/20";
+
+      case "AED":
+        return "bg-green-500/10 text-green-300 border-green-500/20";
+
+      case "CAD":
+        return "bg-red-500/10 text-red-300 border-red-500/20";
+
+      case "AUD":
+        return "bg-yellow-500/10 text-yellow-300 border-yellow-500/20";
+
+      default:
+        return "bg-neutral-800 text-neutral-300 border-neutral-700";
+    }
+  };
+
   const getBooleanLabel = (
     value?: boolean
   ): string => {
@@ -396,8 +461,15 @@ export default function QuickLeadDashboard() {
     if (
       evidence.language_country
     ) {
+      const languageLabel =
+        evidence
+          .language_country_confidence ===
+        "Weak"
+          ? "Language (weak)"
+          : "Language";
+
       pieces.push(
-        `Language: ${evidence.language_country}`
+        `${languageLabel}: ${evidence.language_country}`
       );
     }
 
@@ -407,29 +479,88 @@ export default function QuickLeadDashboard() {
     );
   };
 
-  const sortedBulkData = useMemo(() => {
-    return [...bulkData].sort(
-      (a, b) => {
-        const aScore =
-          a.intelligence
-            ?.opportunity_score ??
-          -1;
-
-        const bScore =
-          b.intelligence
-            ?.opportunity_score ??
-          -1;
-
-        return bScore - aScore;
-      }
+  const getPrimaryCurrency = (
+    lead: LeadData
+  ): string => {
+    return (
+      lead.locale_signals
+        ?.primary_currency ||
+      lead.intelligence
+        ?.localized_project_value
+        ?.currency ||
+      lead.intelligence
+        ?.project_value
+        ?.currency ||
+      "USD"
     );
-  }, [bulkData]);
+  };
+
+  const getPrimaryCurrencySymbol = (
+    lead: LeadData
+  ): string => {
+    return (
+      lead.locale_signals
+        ?.primary_currency_symbol ||
+      lead.intelligence
+        ?.localized_project_value
+        ?.symbol ||
+      "$"
+    );
+  };
+
+  const getCurrencySource = (
+    lead: LeadData
+  ): string => {
+    return (
+      lead.locale_signals
+        ?.currency_source ||
+      lead.intelligence
+        ?.localized_project_value
+        ?.source ||
+      "unknown"
+    );
+  };
+
+  const getLocalizedProjectPrice = (
+    lead: LeadData
+  ): string => {
+    return (
+      lead.intelligence
+        ?.suggested_price_localized ||
+      lead.intelligence
+        ?.localized_project_value
+        ?.formatted ||
+      lead.intelligence
+        ?.suggested_price ||
+      "N/A"
+    );
+  };
+
+  const sortedBulkData =
+    useMemo(() => {
+      return [...bulkData].sort(
+        (a, b) => {
+          const aScore =
+            a.intelligence
+              ?.opportunity_score ??
+            -1;
+
+          const bScore =
+            b.intelligence
+              ?.opportunity_score ??
+            -1;
+
+          return bScore - aScore;
+        }
+      );
+    }, [bulkData]);
 
   const successfulBulkLeads =
     useMemo(() => {
       return bulkData.filter(
         (item) =>
-          item.status === "Success"
+          item.status ===
+          "Success"
       );
     }, [bulkData]);
 
@@ -456,6 +587,10 @@ export default function QuickLeadDashboard() {
       );
     }, [successfulBulkLeads]);
 
+  /*
+   * Keep pipeline math in USD because bulk leads
+   * may use different local currencies.
+   */
   const totalPotential =
     useMemo(() => {
       return successfulBulkLeads.reduce(
@@ -819,6 +954,14 @@ export default function QuickLeadDashboard() {
         data.intelligence ||
         {};
 
+      const locale =
+        data.locale_signals ||
+        {};
+
+      const localizedValue =
+        intel.localized_project_value ||
+        {};
+
       const rows: (
         | string
         | number
@@ -930,14 +1073,58 @@ export default function QuickLeadDashboard() {
             "",
         ],
         [
-          "Project Min",
+          "Suggested Price Localized",
+          intel.suggested_price_localized ||
+            "",
+        ],
+        [
+          "Project Currency",
+          intel.project_value
+            ?.currency ||
+            "USD",
+        ],
+        [
+          "Project Min (USD)",
           intel.project_value
             ?.min ?? "",
         ],
         [
-          "Project Max",
+          "Project Max (USD)",
           intel.project_value
             ?.max ?? "",
+        ],
+        [
+          "Localized Currency",
+          localizedValue.currency ||
+            locale.primary_currency ||
+            "",
+        ],
+        [
+          "Localized Currency Symbol",
+          localizedValue.symbol ||
+            locale.primary_currency_symbol ||
+            "",
+        ],
+        [
+          "Localized Project Min",
+          localizedValue.min ??
+            "",
+        ],
+        [
+          "Localized Project Max",
+          localizedValue.max ??
+            "",
+        ],
+        [
+          "Localized Project Value",
+          localizedValue.formatted ||
+            "",
+        ],
+        [
+          "Currency Source",
+          locale.currency_source ||
+            localizedValue.source ||
+            "",
         ],
         [
           "Problems Found",
@@ -953,18 +1140,31 @@ export default function QuickLeadDashboard() {
         ],
         [
           "Language",
-          data.locale_signals
-            ?.language || "",
+          locale.language ||
+            "",
+        ],
+        [
+          "Language Country",
+          locale
+            .country_evidence
+            ?.language_country ||
+            "",
+        ],
+        [
+          "Language Evidence Strength",
+          locale
+            .country_evidence
+            ?.language_country_confidence ||
+            "",
         ],
         [
           "Country Hint",
-          data.locale_signals
-            ?.country_hint || "",
+          locale.country_hint ||
+            "",
         ],
         [
           "Country Confidence",
-          data.locale_signals
-            ?.country_confidence ||
+          locale.country_confidence ||
             "",
         ],
         [
@@ -976,10 +1176,19 @@ export default function QuickLeadDashboard() {
         [
           "Currency Hints",
           (
-            data.locale_signals
-              ?.currency_hints ||
+            locale.currency_hints ||
             []
           ).join(", "),
+        ],
+        [
+          "Primary Currency",
+          locale.primary_currency ||
+            "",
+        ],
+        [
+          "Primary Currency Symbol",
+          locale.primary_currency_symbol ||
+            "",
         ],
         [
           "Emails",
@@ -1066,6 +1275,7 @@ export default function QuickLeadDashboard() {
           "URL",
           "Domain",
           "Business Name",
+          "Business Name Confidence",
           "Website Health",
           "Sales Opportunity",
           "Opportunity Level",
@@ -1074,13 +1284,19 @@ export default function QuickLeadDashboard() {
           "Best Sales Angle",
           "Recommended Service",
           "Suggested Price",
-          "Project Min",
-          "Project Max",
+          "Suggested Price Localized",
+          "Project Currency",
+          "Project Min USD",
+          "Project Max USD",
+          "Localized Currency",
+          "Localized Project Value",
+          "Country",
+          "Country Confidence",
+          "Primary Currency",
+          "Currency Source",
           "Top Sales Reasons",
           "Phone",
           "Email",
-          "Country",
-          "Country Confidence",
         ],
       ];
 
@@ -1097,6 +1313,14 @@ export default function QuickLeadDashboard() {
               item.intelligence ||
               {};
 
+            const localized =
+              intel.localized_project_value ||
+              {};
+
+            const locale =
+              item.locale_signals ||
+              {};
+
             rows.push([
               index + 1,
               item.url || "",
@@ -1105,6 +1329,8 @@ export default function QuickLeadDashboard() {
                 getBusinessDisplayName(
                   item
                 ),
+              item.business_name_confidence ??
+                "",
               intel.website_score ??
                 "",
               intel.opportunity_score ??
@@ -1121,10 +1347,30 @@ export default function QuickLeadDashboard() {
                 "",
               intel.suggested_price ||
                 "",
+              intel.suggested_price_localized ||
+                localized.formatted ||
+                "",
+              intel.project_value
+                ?.currency ||
+                "USD",
               intel.project_value
                 ?.min ?? "",
               intel.project_value
                 ?.max ?? "",
+              localized.currency ||
+                locale.primary_currency ||
+                "",
+              localized.formatted ||
+                "",
+              locale.country_hint ||
+                "",
+              locale.country_confidence ||
+                "",
+              locale.primary_currency ||
+                "",
+              locale.currency_source ||
+                localized.source ||
+                "",
               (
                 intel.opportunity_reasons ||
                 []
@@ -1135,17 +1381,12 @@ export default function QuickLeadDashboard() {
               item.emails
                 ?.join(" | ") ||
                 "",
-              item.locale_signals
-                ?.country_hint ||
-                "",
-              item.locale_signals
-                ?.country_confidence ||
-                "",
             ]);
           } else {
             rows.push([
               index + 1,
               item.url || "",
+              "",
               "",
               "",
               "",
@@ -1158,10 +1399,15 @@ export default function QuickLeadDashboard() {
               "",
               "",
               "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
+              "",
               item.error ||
                 "Scan failed",
-              "",
-              "",
               "",
               "",
             ]);
@@ -1245,6 +1491,7 @@ export default function QuickLeadDashboard() {
             )}`}
           >
             <BriefcaseBusiness className="w-3.5 h-3.5" />
+
             {getPrettyKey(
               intel.lead_type
             )}
@@ -1258,6 +1505,7 @@ export default function QuickLeadDashboard() {
             )}`}
           >
             <Gauge className="w-3.5 h-3.5" />
+
             Commercial Intent:{" "}
             {intel.commercial_intent}
           </span>
@@ -1267,10 +1515,34 @@ export default function QuickLeadDashboard() {
           ?.country_hint && (
           <span className="inline-flex items-center gap-1.5 bg-neutral-800 border border-neutral-700 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-neutral-300">
             <MapPin className="w-3.5 h-3.5" />
+
             {lead.locale_signals.country_hint}
-            {lead.locale_signals.country_confidence
+
+            {lead.locale_signals
+              .country_confidence
               ? ` • ${lead.locale_signals.country_confidence}`
               : ""}
+          </span>
+        )}
+
+        {getPrimaryCurrency(
+          lead
+        ) && (
+          <span
+            className={`inline-flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-[11px] font-semibold ${getCurrencyClasses(
+              getPrimaryCurrency(
+                lead
+              )
+            )}`}
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+
+            {getPrimaryCurrency(
+              lead
+            )}{" "}
+            {getPrimaryCurrencySymbol(
+              lead
+            )}
           </span>
         )}
       </div>
@@ -1296,6 +1568,21 @@ export default function QuickLeadDashboard() {
     const language =
       lead.locale_signals
         ?.language;
+
+    const primaryCurrency =
+      getPrimaryCurrency(
+        lead
+      );
+
+    const primaryCurrencySymbol =
+      getPrimaryCurrencySymbol(
+        lead
+      );
+
+    const currencySource =
+      getCurrencySource(
+        lead
+      );
 
     return (
       <div
@@ -1373,8 +1660,42 @@ export default function QuickLeadDashboard() {
                     <span className="text-neutral-300">
                       {language}
                     </span>
+
+                    {lead
+                      .locale_signals
+                      ?.country_evidence
+                      ?.language_country_confidence ===
+                      "Weak" && (
+                      <span className="text-yellow-500">
+                        {" "}
+                        (weak country evidence)
+                      </span>
+                    )}
                   </span>
                 )}
+
+                <span>
+                  Currency:{" "}
+                  <span className="text-neutral-300">
+                    {primaryCurrency}{" "}
+                    {primaryCurrencySymbol}
+                  </span>
+
+                  {currencySource &&
+                    currencySource !==
+                      "unknown" && (
+                      <span className="text-neutral-500">
+                        {" "}
+                        (
+                        {currencySource
+                          .replace(
+                            /_/g,
+                            " "
+                          )}
+                        )
+                      </span>
+                    )}
+                </span>
               </div>
 
               <div className="flex flex-wrap gap-2 mt-6">
@@ -1426,17 +1747,21 @@ export default function QuickLeadDashboard() {
                   className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm transition-colors"
                 >
                   <FileText className="w-4 h-4" />
+
                   Audit PDF
                 </button>
 
                 {lead.url && (
                   <a
-                    href={lead.url}
+                    href={
+                      lead.url
+                    }
                     target="_blank"
                     rel="noopener noreferrer"
                     className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 text-sm transition-colors"
                   >
                     <ExternalLink className="w-4 h-4" />
+
                     Open Website
                   </a>
                 )}
@@ -1495,24 +1820,55 @@ export default function QuickLeadDashboard() {
             </div>
 
             <p className="text-2xl font-bold text-green-400">
-              {intel.suggested_price ||
-                "N/A"}
+              {getLocalizedProjectPrice(
+                lead
+              )}
             </p>
 
-            {intel.project_value && (
-              <p className="text-xs text-neutral-500 mt-1">
-                Potential range: $
-                {(
-                  intel.project_value
-                    .min ?? 0
-                ).toLocaleString()}{" "}
-                – $
-                {(
-                  intel.project_value
-                    .max ?? 0
-                ).toLocaleString()}
+            <div className="space-y-1 mt-2">
+              {intel.project_value && (
+                <p className="text-xs text-neutral-500">
+                  Internal USD range: $
+                  {(
+                    intel
+                      .project_value
+                      .min ?? 0
+                  ).toLocaleString()}{" "}
+                  – $
+                  {(
+                    intel
+                      .project_value
+                      .max ?? 0
+                  ).toLocaleString()}
+                </p>
+              )}
+
+              {intel.localized_project_value
+                ?.formatted && (
+                <p className="text-xs text-neutral-400">
+                  Local range:{" "}
+                  {
+                    intel
+                      .localized_project_value
+                      .formatted
+                  }
+                </p>
+              )}
+
+              <p className="text-[10px] text-neutral-600">
+                Currency:{" "}
+                {primaryCurrency}{" "}
+                {primaryCurrencySymbol}
+                {currencySource &&
+                  currencySource !==
+                    "unknown"
+                  ? ` • ${currencySource.replace(
+                      /_/g,
+                      " "
+                    )}`
+                  : ""}
               </p>
-            )}
+            </div>
           </div>
 
           <div className="bg-blue-900/10 border border-blue-500/30 rounded-xl p-5">
@@ -1550,7 +1906,7 @@ export default function QuickLeadDashboard() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
               <p className="text-[10px] uppercase tracking-wider text-neutral-500">
                 Lead Type
@@ -1619,6 +1975,31 @@ export default function QuickLeadDashboard() {
                 Source:{" "}
                 {lead.business_name_source ||
                   "Unknown"}
+              </p>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Primary Currency
+              </p>
+
+              <div className="flex items-center gap-2 mt-2">
+                <span
+                  className={`inline-flex border px-2 py-1 rounded-md text-xs font-semibold ${getCurrencyClasses(
+                    primaryCurrency
+                  )}`}
+                >
+                  {primaryCurrency}
+                </span>
+
+                <span className="text-lg font-semibold text-neutral-200">
+                  {primaryCurrencySymbol}
+                </span>
+              </div>
+
+              <p className="text-xs text-neutral-500 mt-1">
+                Source:{" "}
+                {currencySource}
               </p>
             </div>
           </div>
@@ -1779,6 +2160,7 @@ export default function QuickLeadDashboard() {
                     className="text-xs bg-neutral-800 hover:bg-neutral-700 text-white px-3 py-2 rounded-md flex items-center gap-2"
                   >
                     <Copy className="w-3.5 h-3.5" />
+
                     Copy Message
                   </button>
                 </div>
@@ -2076,7 +2458,9 @@ export default function QuickLeadDashboard() {
                             link ? (
                               <a
                                 key={platform}
-                                href={link}
+                                href={
+                                  link
+                                }
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-xs bg-neutral-900 border border-neutral-800 hover:border-neutral-600 px-2.5 py-1.5 rounded capitalize text-blue-400 transition-colors flex items-center gap-1.5"
@@ -2324,13 +2708,37 @@ export default function QuickLeadDashboard() {
                           Language
                         </span>
 
-                        <span className="text-xs text-neutral-400">
+                        <span className="text-xs text-neutral-400 text-right">
                           {lead
                             .locale_signals
                             ?.language ||
                             "Unknown"}
                         </span>
                       </div>
+
+                      {lead
+                        .locale_signals
+                        ?.country_evidence
+                        ?.language_country && (
+                        <div className="text-[11px] text-neutral-500 mt-1">
+                          Country signal:{" "}
+                          {
+                            lead
+                              .locale_signals
+                              .country_evidence
+                              .language_country
+                          }{" "}
+                          (
+                          {
+                            lead
+                              .locale_signals
+                              .country_evidence
+                              .language_country_confidence ||
+                            "Unknown"
+                          }
+                          )
+                        </div>
+                      )}
                     </div>
 
                     <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
@@ -2364,6 +2772,28 @@ export default function QuickLeadDashboard() {
                               )
                             : "None detected"}
                         </span>
+                      </div>
+                    </div>
+
+                    <div className="bg-neutral-900 border border-neutral-800 px-3 py-3 rounded">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm text-neutral-300">
+                          Primary Currency
+                        </span>
+
+                        <span
+                          className={`inline-flex border px-2 py-1 rounded-md text-xs font-semibold ${getCurrencyClasses(
+                            primaryCurrency
+                          )}`}
+                        >
+                          {primaryCurrency}{" "}
+                          {primaryCurrencySymbol}
+                        </span>
+                      </div>
+
+                      <div className="text-[11px] text-neutral-500 mt-1">
+                        Source:{" "}
+                        {currencySource}
                       </div>
                     </div>
                   </div>
@@ -2478,7 +2908,7 @@ export default function QuickLeadDashboard() {
             </span>
 
             <span>
-              Engine: Global Sales Intelligence V5
+              Engine: Global Sales Intelligence V6
             </span>
           </div>
         )}
@@ -2653,10 +3083,13 @@ export default function QuickLeadDashboard() {
                 </div>
 
                 <button
-                  onClick={exportCSV}
+                  onClick={
+                    exportCSV
+                  }
                   className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                   <Download className="w-4 h-4" />
+
                   Export Lead
                 </button>
               </div>
@@ -2724,6 +3157,10 @@ export default function QuickLeadDashboard() {
                     $
                     {totalPotential.toLocaleString()}
                   </p>
+
+                  <p className="text-[10px] text-neutral-600 mt-1">
+                    USD baseline across mixed-country leads
+                  </p>
                 </div>
 
               </div>
@@ -2740,10 +3177,13 @@ export default function QuickLeadDashboard() {
                 </div>
 
                 <button
-                  onClick={exportCSV}
+                  onClick={
+                    exportCSV
+                  }
                   className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
                 >
                   <Download className="w-4 h-4" />
+
                   Export Leads
                 </button>
               </div>
@@ -2786,6 +3226,10 @@ export default function QuickLeadDashboard() {
                         </th>
 
                         <th className="p-3">
+                          Currency
+                        </th>
+
+                        <th className="p-3">
                           Country
                         </th>
 
@@ -2804,6 +3248,16 @@ export default function QuickLeadDashboard() {
                           const intel =
                             item.intelligence ||
                             {};
+
+                          const itemCurrency =
+                            getPrimaryCurrency(
+                              item
+                            );
+
+                          const itemCurrencySymbol =
+                            getPrimaryCurrencySymbol(
+                              item
+                            );
 
                           return (
                             <tr
@@ -2842,6 +3296,18 @@ export default function QuickLeadDashboard() {
                                             ""
                                         )}
                                     </div>
+
+                                    {item
+                                      .business_name_confidence !==
+                                      undefined && (
+                                      <div className="text-[10px] text-neutral-600 mt-1">
+                                        Name confidence:{" "}
+                                        {
+                                          item.business_name_confidence
+                                        }
+                                        %
+                                      </div>
+                                    )}
                                   </button>
                                 ) : (
                                   <div>
@@ -2948,10 +3414,57 @@ export default function QuickLeadDashboard() {
                               </td>
 
                               <td className="p-3 whitespace-nowrap">
-                                <span className="text-green-400 text-xs font-semibold">
-                                  {intel.suggested_price ||
-                                    "—"}
-                                </span>
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-green-400 text-xs font-semibold">
+                                    {intel.suggested_price_localized ||
+                                      intel.localized_project_value
+                                        ?.formatted ||
+                                      intel.suggested_price ||
+                                      "—"}
+                                  </span>
+
+                                  {intel
+                                    .project_value && (
+                                    <span className="text-[10px] text-neutral-600">
+                                      USD $
+                                      {(
+                                        intel
+                                          .project_value
+                                          .min ??
+                                        0
+                                      ).toLocaleString()}
+                                      {" – "}
+                                      $
+                                      {(
+                                        intel
+                                          .project_value
+                                          .max ??
+                                        0
+                                      ).toLocaleString()}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              <td className="p-3 whitespace-nowrap">
+                                <div className="flex flex-col gap-1">
+                                  <span
+                                    className={`inline-flex w-fit border px-2 py-1 rounded-md text-[10px] font-semibold ${getCurrencyClasses(
+                                      itemCurrency
+                                    )}`}
+                                  >
+                                    {itemCurrency}{" "}
+                                    {
+                                      itemCurrencySymbol
+                                    }
+                                  </span>
+
+                                  <span className="text-[10px] text-neutral-600">
+                                    {item.locale_signals
+                                      ?.currency_source ||
+                                      ""}
+                                  </span>
+                                </div>
                               </td>
 
                               <td className="p-3 whitespace-nowrap">
@@ -2982,6 +3495,7 @@ export default function QuickLeadDashboard() {
                                     className="bg-neutral-800 hover:bg-blue-600 text-white px-3 py-2 rounded-md text-xs flex items-center gap-1.5 transition-colors"
                                   >
                                     <Eye className="w-3.5 h-3.5" />
+
                                     Open
                                   </button>
                                 ) : (
@@ -3048,12 +3562,15 @@ export default function QuickLeadDashboard() {
               <div className="flex items-center gap-2">
                 {previewLead?.url && (
                   <a
-                    href={previewLead.url}
+                    href={
+                      previewLead.url
+                    }
                     target="_blank"
                     rel="noopener noreferrer"
                     className="bg-neutral-800 hover:bg-neutral-700 text-neutral-200 px-3 py-2 rounded-md text-xs flex items-center gap-2"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
+
                     Original Site
                   </a>
                 )}

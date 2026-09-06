@@ -1,4 +1,4 @@
-# QuickLead Intel V5 - Global Sales Intelligence Engine
+# QuickLead Intel V6 - Global Sales Intelligence + Data Quality Engine
 
 import asyncio
 import html as html_lib
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="5.0.0",
+    version="6.0.0",
 )
 
 app.add_middleware(
@@ -215,6 +215,42 @@ GENERIC_NAME_PATTERNS = {
     "site",
     "company",
     "your company",
+}
+
+# V6:
+# Reject obvious CTA/action text from becoming a company name.
+BUSINESS_NAME_NOISE = {
+    "download",
+    "download brochure",
+    "download broucher",
+    "brochure",
+    "broucher",
+    "read more",
+    "learn more",
+    "know more",
+    "contact us",
+    "contact",
+    "get started",
+    "start now",
+    "book now",
+    "book a call",
+    "request quote",
+    "request a quote",
+    "get quote",
+    "get a quote",
+    "enquire",
+    "enquiry",
+    "inquire",
+    "inquiry",
+    "send message",
+    "view details",
+    "view more",
+    "click here",
+    "submit",
+    "subscribe",
+    "privacy policy",
+    "cookie policy",
+    "terms of use",
 }
 
 DESCRIPTIVE_NAME_WORDS = {
@@ -471,8 +507,6 @@ COUNTRY_DIAL_CODES = {
     "CD": "243",
     "GQ": "240",
     "ER": "291",
-    "NA": "264",
-    "BR": "55",
     "EC": "593",
     "BO": "591",
     "PY": "595",
@@ -483,6 +517,64 @@ COUNTRY_DIAL_CODES = {
     "SV": "503",
     "HN": "504",
     "NI": "505",
+}
+
+COUNTRY_CURRENCY_MAP = {
+    "US": ("USD", "$"),
+    "CA": ("CAD", "C$"),
+    "GB": ("GBP", "£"),
+    "IN": ("INR", "₹"),
+    "AU": ("AUD", "A$"),
+    "NZ": ("NZD", "NZ$"),
+    "SG": ("SGD", "S$"),
+    "JP": ("JPY", "¥"),
+    "CN": ("CNY", "¥"),
+    "AE": ("AED", "د.إ"),
+    "SA": ("SAR", "﷼"),
+    "MY": ("MYR", "RM"),
+    "BR": ("BRL", "R$"),
+    "ZA": ("ZAR", "R"),
+    "MX": ("MXN", "MX$"),
+}
+
+CURRENCY_SYMBOL_MAP = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "INR": "₹",
+    "CAD": "C$",
+    "AUD": "A$",
+    "JPY": "¥",
+    "CNY": "¥",
+    "AED": "د.إ",
+    "SAR": "﷼",
+    "SGD": "S$",
+    "NZD": "NZ$",
+    "MYR": "RM",
+    "BRL": "R$",
+    "ZAR": "R",
+    "MXN": "MX$",
+}
+
+# Internal indicative display conversion.
+# These are presentation values, not live exchange rates.
+INDICATIVE_USD_RATES = {
+    "USD": 1.0,
+    "CAD": 1.36,
+    "GBP": 0.79,
+    "INR": 88.0,
+    "AUD": 1.51,
+    "NZD": 1.68,
+    "SGD": 1.29,
+    "JPY": 157.0,
+    "CNY": 7.18,
+    "AED": 3.67,
+    "SAR": 3.75,
+    "MYR": 4.20,
+    "BRL": 5.40,
+    "ZAR": 17.20,
+    "MXN": 18.50,
+    "EUR": 0.86,
 }
 
 
@@ -544,6 +636,7 @@ def clean_text(
 def looks_generic_business_name(
     value: str,
 ) -> bool:
+
     text = clean_text(
         value
     ).lower()
@@ -560,12 +653,50 @@ def looks_generic_business_name(
     if text in GENERIC_NAME_PATTERNS:
         return True
 
+    if text in BUSINESS_NAME_NOISE:
+        return True
+
+    # Strong CTA/action language is not a business name.
+    action_words = [
+        "download",
+        "click",
+        "submit",
+        "view",
+        "read",
+        "learn",
+        "contact",
+        "request",
+        "get",
+        "book",
+        "schedule",
+        "subscribe",
+        "enquire",
+        "inquire",
+    ]
+
+    action_count = sum(
+        1
+        for word in action_words
+        if re.search(
+            rf"\b{re.escape(word)}\b",
+            text,
+        )
+    )
+
+    if action_count >= 2:
+        return True
+
+    # A business name should not read like a sentence/instruction.
+    if len(text.split()) > 8:
+        return True
+
     return False
 
 
 def clean_business_name_candidate(
     value: str,
 ) -> str:
+
     value = clean_text(
         value
     )
@@ -607,12 +738,36 @@ def clean_business_name_candidate(
         value,
     ).strip()
 
-    return value
+    # Remove CTA fragments embedded in footer text.
+    value = re.sub(
+        r"\b(?:download|read|learn|view)\s+"
+        r"(?:the\s+)?(?:brochure|broucher|more|details?)\b.*$",
+        "",
+        value,
+        flags=re.I,
+    ).strip()
+
+    value = re.sub(
+        r"^[|•·,\-–—:\s]+",
+        "",
+        value,
+    )
+
+    value = re.sub(
+        r"[|•·,\-–—:\s]+$",
+        "",
+        value,
+    )
+
+    return clean_text(
+        value
+    )
 
 
 def name_quality(
     value: str,
 ) -> int:
+
     value = clean_business_name_candidate(
         value
     )
@@ -733,6 +888,80 @@ def iter_jsonld_objects(
 
 
 # =========================================================
+# DOMAIN NAME INFERENCE
+# =========================================================
+
+def infer_business_name_from_domain(
+    url_or_domain: str,
+) -> str:
+
+    value = clean_text(
+        str(url_or_domain)
+    ).lower()
+
+    if not value:
+        return ""
+
+    if "://" in value:
+        domain = get_domain(
+            value
+        )
+    else:
+        domain = (
+            value
+            .split("/")[0]
+            .split(":")[0]
+            .removeprefix("www.")
+        )
+
+    if not domain:
+        return ""
+
+    hostname = domain.split(
+        "."
+    )[0]
+
+    if not hostname:
+        return ""
+
+    words = re.split(
+        r"[-_]+",
+        hostname,
+    )
+
+    if len(words) == 1:
+        # Split simple camel-case-like domain fragments.
+        parts = re.findall(
+            r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)|\d+",
+            words[0],
+        )
+
+        if parts:
+            words = parts
+
+    words = [
+        word.strip()
+        for word in words
+        if word.strip()
+    ]
+
+    if not words:
+        return ""
+
+    result = " ".join(
+        word.capitalize()
+        for word in words
+    )
+
+    if looks_generic_business_name(
+        result
+    ):
+        return ""
+
+    return result
+
+
+# =========================================================
 # BUSINESS NAME
 # =========================================================
 
@@ -798,7 +1027,12 @@ def extract_business_name(
                     cleaned
                 )
 
-                if quality >= 50:
+                if (
+                    quality >= 50
+                    and not looks_generic_business_name(
+                        cleaned
+                    )
+                ):
                     candidates.append(
                         (
                             cleaned,
@@ -831,7 +1065,12 @@ def extract_business_name(
                     cleaned
                 )
 
-                if quality >= 50:
+                if (
+                    quality >= 50
+                    and not looks_generic_business_name(
+                        cleaned
+                    )
+                ):
                     candidates.append(
                         (
                             cleaned,
@@ -842,7 +1081,10 @@ def extract_business_name(
 
     if candidates:
         candidates.sort(
-            key=lambda item: item[1],
+            key=lambda item: (
+                item[1],
+                name_quality(item[0]),
+            ),
             reverse=True,
         )
 
@@ -875,6 +1117,9 @@ def extract_business_name(
             if (
                 name_quality(cleaned)
                 >= 45
+                and not looks_generic_business_name(
+                    cleaned
+                )
             ):
                 return (
                     cleaned,
@@ -903,6 +1148,9 @@ def extract_business_name(
         if (
             name_quality(cleaned)
             >= 50
+            and not looks_generic_business_name(
+                cleaned
+            )
         ):
             return (
                 cleaned,
@@ -950,6 +1198,9 @@ def extract_business_name(
             <= 100
             and name_quality(cleaned)
             >= 45
+            and not looks_generic_business_name(
+                cleaned
+            )
         ):
             return (
                 cleaned,
@@ -990,6 +1241,9 @@ def extract_business_name(
             if (
                 name_quality(cleaned)
                 >= 45
+                and not looks_generic_business_name(
+                    cleaned
+                )
             ):
                 return (
                     cleaned,
@@ -1001,7 +1255,9 @@ def extract_business_name(
     # Footer
     # -----------------------------------------------------
 
-    footer_candidates: list[str] = []
+    footer_candidates: list[
+        tuple[str, int]
+    ] = []
 
     for selector in [
         "footer",
@@ -1021,7 +1277,7 @@ def extract_business_name(
             )
         )
 
-        # Copyright names
+        # Copyright names.
         copyright_patterns = [
             r"(?:©|copyright)\s*(?:\d{4}\s*)?([^|•]+)",
             r"(?:©|copyright)\s*(?:\d{4}\s*)?([A-Za-z0-9&.,'’\- ]{2,80})",
@@ -1039,13 +1295,22 @@ def extract_business_name(
                     match
                 )
 
+                quality = name_quality(
+                    cleaned
+                )
+
                 if (
                     cleaned
-                    and name_quality(cleaned)
-                    >= 40
+                    and quality >= 40
+                    and not looks_generic_business_name(
+                        cleaned
+                    )
                 ):
                     footer_candidates.append(
-                        cleaned
+                        (
+                            cleaned,
+                            quality,
+                        )
                     )
 
         # Look at short footer child elements.
@@ -1059,41 +1324,61 @@ def extract_business_name(
                 )
             )
 
-            if (
+            if not (
                 2
                 <= len(child_text)
                 <= 80
             ):
-                cleaned = clean_business_name_candidate(
-                    child_text
-                )
+                continue
 
-                quality = name_quality(
+            cleaned = clean_business_name_candidate(
+                child_text
+            )
+
+            quality = name_quality(
+                cleaned
+            )
+
+            if (
+                quality >= 55
+                and not looks_generic_business_name(
                     cleaned
                 )
-
-                if quality >= 55:
-                    footer_candidates.append(
-                        cleaned
+            ):
+                footer_candidates.append(
+                    (
+                        cleaned,
+                        quality,
                     )
+                )
 
     if footer_candidates:
-        unique = list(
-            dict.fromkeys(
-                footer_candidates
-            )
-        )
+        unique: dict[str, int] = {}
 
-        unique.sort(
-            key=name_quality,
+        for candidate, quality in footer_candidates:
+            unique[candidate] = max(
+                unique.get(
+                    candidate,
+                    0,
+                ),
+                quality,
+            )
+
+        ranked = sorted(
+            unique.items(),
+            key=lambda item: (
+                item[1],
+                -len(item[0]),
+            ),
             reverse=True,
         )
 
-        return (
-            unique[0],
-            "footer",
-            70,
-        )
+        if ranked:
+            return (
+                ranked[0][0],
+                "footer",
+                70,
+            )
 
     # -----------------------------------------------------
     # Title fallback
@@ -1130,14 +1415,23 @@ def extract_business_name(
 
             if len(parts) >= 2:
                 for part in parts:
-                    quality = name_quality(
+                    cleaned = clean_business_name_candidate(
                         part
                     )
 
-                    if quality >= 40:
+                    quality = name_quality(
+                        cleaned
+                    )
+
+                    if (
+                        quality >= 40
+                        and not looks_generic_business_name(
+                            cleaned
+                        )
+                    ):
                         title_candidates.append(
                             (
-                                part,
+                                cleaned,
                                 quality,
                             )
                         )
@@ -1188,11 +1482,15 @@ def get_phone_country(
         return None
 
     # Longest prefixes first.
-    for code in sorted(
-        COUNTRY_DIAL_CODES.values(),
+    unique_codes = sorted(
+        set(
+            COUNTRY_DIAL_CODES.values()
+        ),
         key=len,
         reverse=True,
-    ):
+    )
+
+    for code in unique_codes:
         if digits.startswith(
             code
         ):
@@ -1204,13 +1502,73 @@ def get_phone_country(
             ]
 
             if matches:
-                # NANP is shared between US/CA.
+                # NANP is shared between US/Canada.
                 if code == "1":
                     return "US"
 
                 return matches[0]
 
     return None
+
+
+def is_plausible_phone_for_country(
+    digits: str,
+    country_hint: Optional[str],
+) -> bool:
+
+    if not digits:
+        return False
+
+    if len(set(digits)) == 1:
+        return False
+
+    if digits.startswith(
+        (
+            "000000",
+            "111111",
+            "123456",
+            "999999",
+        )
+    ):
+        return False
+
+    # India:
+    # Mobile numbers are normally 10 digits beginning with 6-9.
+    if country_hint == "IN":
+        if len(digits) == 10:
+            return digits[0] in "6789"
+
+        if len(digits) == 12 and digits.startswith("91"):
+            local = digits[2:]
+            return (
+                len(local) == 10
+                and local[0] in "6789"
+            )
+
+        # Indian landlines may be 10 digits or
+        # already international in different forms.
+        if len(digits) == 11 and digits.startswith("0"):
+            local = digits[1:]
+
+            if (
+                len(local) == 10
+                and local[0] in "234"
+            ):
+                return True
+
+        if len(digits) == 12 and digits.startswith("91"):
+            local = digits[2:]
+
+            if (
+                len(local) == 10
+                and local[0] in "234"
+            ):
+                return True
+
+        return False
+
+    # Generic international validation.
+    return 8 <= len(digits) <= 15
 
 
 def normalize_phone_for_country(
@@ -1257,34 +1615,100 @@ def normalize_phone_for_country(
         "+"
     )
 
+    # -----------------------------------------------------
     # Already international.
+    # -----------------------------------------------------
+
     if has_plus:
-        if (
-            8
-            <= len(digits)
-            <= 15
-        ):
+
+        detected_country = get_phone_country(
+            digits
+        )
+
+        if country_hint == "IN":
+            if digits.startswith(
+                "91"
+            ):
+                local = digits[2:]
+
+                if (
+                    len(local) == 10
+                    and local[0] in "6789"
+                ):
+                    return f"+{digits}"
+
+                if (
+                    len(local) == 10
+                    and local[0] in "234"
+                ):
+                    return f"+{digits}"
+
+                return None
+
+        if detected_country:
+            return f"+{digits}"
+
+        if 8 <= len(digits) <= 15:
             return f"+{digits}"
 
         return None
 
-    # Country-aware local number conversion.
+    # -----------------------------------------------------
+    # Country-aware local conversion.
+    # -----------------------------------------------------
+
     if country_hint:
         dial_code = COUNTRY_DIAL_CODES.get(
             country_hint
         )
 
         if dial_code:
-            # If already starts with country code.
-            if digits.startswith(
-                dial_code
-            ) and len(digits) >= len(
-                dial_code
-            ) + 6:
-                return f"+{digits}"
 
-            # Remove domestic trunk prefix for common
-            # countries before adding the international code.
+            # Already starts with country code.
+            if (
+                digits.startswith(
+                    dial_code
+                )
+                and len(digits)
+                >= len(dial_code) + 6
+            ):
+                if is_plausible_phone_for_country(
+                    digits,
+                    country_hint,
+                ):
+                    return f"+{digits}"
+
+            # India-specific local validation.
+            if country_hint == "IN":
+
+                local_digits = digits
+
+                if local_digits.startswith(
+                    "0"
+                ):
+                    local_digits = local_digits[1:]
+
+                # Mobile.
+                if (
+                    len(local_digits) == 10
+                    and local_digits[0] in "6789"
+                ):
+                    return (
+                        f"+91{local_digits}"
+                    )
+
+                # Landline.
+                if (
+                    len(local_digits) == 10
+                    and local_digits[0] in "234"
+                ):
+                    return (
+                        f"+91{local_digits}"
+                    )
+
+                return None
+
+            # Generic countries.
             local_digits = digits
 
             if (
@@ -1297,8 +1721,6 @@ def normalize_phone_for_country(
                     "0"
                 )
 
-            # Most local numbers should land in a
-            # plausible international range.
             international = (
                 dial_code
                 + local_digits
@@ -1308,13 +1730,23 @@ def normalize_phone_for_country(
                 9
                 <= len(international)
                 <= 15
+                and is_plausible_phone_for_country(
+                    international,
+                    country_hint,
+                )
             ):
                 return (
                     f"+{international}"
                 )
 
+    # -----------------------------------------------------
     # No country available.
-    return digits
+    # -----------------------------------------------------
+
+    if 8 <= len(digits) <= 15:
+        return digits
+
+    return None
 
 
 # =========================================================
@@ -1399,7 +1831,7 @@ def extract_phone_numbers(
                 digits
             )
 
-    return phones[:8]
+    return phones[:12]
 
 
 # =========================================================
@@ -2031,7 +2463,11 @@ def detect_locale_signals(
             ).lower()
 
     language_country = None
+    language_country_confidence = (
+        "None"
+    )
 
+    # Language is deliberately weak evidence.
     if language and "-" in language:
         possible = language.rsplit(
             "-",
@@ -2046,6 +2482,9 @@ def detect_locale_signals(
             )
         ):
             language_country = possible
+            language_country_confidence = (
+                "Weak"
+            )
 
     text = soup.get_text(
         " ",
@@ -2069,6 +2508,8 @@ def detect_locale_signals(
             "INR",
             "₹",
             "Rs.",
+            "Rs ",
+            "INR.",
         ],
         "CAD": [
             "CAD",
@@ -2111,6 +2552,9 @@ def detect_locale_signals(
         "ZAR": [
             "ZAR",
         ],
+        "MXN": [
+            "MXN",
+        ],
     }
 
     currency_hints: list[str] = []
@@ -2124,7 +2568,7 @@ def detect_locale_signals(
                 currency
             )
 
-    # TLD
+    # TLD.
     tld = ""
 
     hostname = get_domain(
@@ -2141,7 +2585,7 @@ def detect_locale_signals(
         tld
     )
 
-    # Explicit country
+    # Explicit country.
     explicit_countries = extract_country_names(
         text[:40000]
     )
@@ -2152,7 +2596,7 @@ def detect_locale_signals(
         else None
     )
 
-    # Phone evidence
+    # Phone evidence.
     phone_countries: list[str] = []
 
     if phones:
@@ -2196,7 +2640,7 @@ def detect_locale_signals(
             + weight
         )
 
-    # Strongest
+    # Strongest.
     add(
         phone_country,
         100,
@@ -2223,6 +2667,7 @@ def detect_locale_signals(
         "MYR": "MY",
         "BRL": "BR",
         "ZAR": "ZA",
+        "MXN": "MX",
     }
 
     for currency in currency_hints:
@@ -2261,7 +2706,12 @@ def detect_locale_signals(
                 1,
             )[1].upper()
 
-            if len(possible) == 2:
+            if (
+                len(possible) == 2
+                and possible in set(
+                    TLD_COUNTRY_MAP.values()
+                )
+            ):
                 hreflang_countries.append(
                     possible
                 )
@@ -2274,7 +2724,7 @@ def detect_locale_signals(
             18,
         )
 
-    # Language is only weak evidence.
+    # Language only receives weak evidence.
     add(
         language_country,
         5,
@@ -2293,26 +2743,76 @@ def detect_locale_signals(
             country_hint
         ]
 
-        if score >= 100:
-            country_confidence = "High"
-        elif score >= 70:
+        if score >= 70:
             country_confidence = "High"
         elif score >= 35:
             country_confidence = "Medium"
         else:
             country_confidence = "Low"
 
+    # -----------------------------------------------------
+    # Primary currency
+    # -----------------------------------------------------
+
+    primary_currency = None
+    primary_currency_symbol = None
+    currency_source = "unknown"
+
+    if currency_hints:
+
+        # Prefer the first detected site currency.
+        primary_currency = (
+            currency_hints[0]
+        )
+
+        primary_currency_symbol = (
+            CURRENCY_SYMBOL_MAP.get(
+                primary_currency
+            )
+        )
+
+        currency_source = (
+            "site_detected"
+        )
+
+    elif country_hint in COUNTRY_CURRENCY_MAP:
+
+        (
+            primary_currency,
+            primary_currency_symbol,
+        ) = COUNTRY_CURRENCY_MAP[
+            country_hint
+        ]
+
+        currency_source = (
+            "country_inferred"
+        )
+
+    # -----------------------------------------------------
+    # Country evidence labels
+    # -----------------------------------------------------
+
+    country_evidence = {
+        "phone_country": phone_country,
+        "explicit_country": explicit_country,
+        "tld_country": tld_country,
+        "language_country": language_country,
+        "language_country_confidence": (
+            language_country_confidence
+        ),
+    }
+
     return {
         "language": language,
         "country_hint": country_hint,
         "country_confidence": country_confidence,
-        "country_evidence": {
-            "phone_country": phone_country,
-            "explicit_country": explicit_country,
-            "tld_country": tld_country,
-            "language_country": language_country,
-        },
+        "country_evidence": country_evidence,
         "currency_hints": currency_hints[:8],
+        "primary_currency": primary_currency,
+        "primary_currency_symbol": (
+            primary_currency_symbol
+        ),
+        "currency_source": currency_source,
     }
 
 
@@ -2396,6 +2896,148 @@ def detect_trackers(
 
 
 # =========================================================
+# PRICE HELPERS
+# =========================================================
+
+def convert_usd_project_value(
+    minimum: int,
+    maximum: int,
+    currency: Optional[str],
+) -> tuple[int, int]:
+
+    if not currency:
+        return (
+            minimum,
+            maximum,
+        )
+
+    rate = INDICATIVE_USD_RATES.get(
+        currency
+    )
+
+    if not rate:
+        return (
+            minimum,
+            maximum,
+        )
+
+    localized_min = int(
+        round(
+            minimum * rate
+        )
+    )
+
+    localized_max = int(
+        round(
+            maximum * rate
+        )
+    )
+
+    return (
+        localized_min,
+        localized_max,
+    )
+
+
+def format_currency_value(
+    value: int,
+    currency: Optional[str],
+    symbol: Optional[str],
+) -> str:
+
+    if not currency:
+        return str(value)
+
+    currency_symbol = (
+        symbol
+        or CURRENCY_SYMBOL_MAP.get(
+            currency,
+            currency,
+        )
+    )
+
+    if currency in {
+        "JPY",
+        "INR",
+        "KRW",
+        "VND",
+    }:
+        return (
+            f"{currency_symbol}"
+            f"{value:,}"
+        )
+
+    return (
+        f"{currency_symbol}"
+        f"{value:,}"
+    )
+
+
+def build_localized_project_value(
+    minimum: int,
+    maximum: int,
+    locale_signals: dict,
+) -> dict:
+
+    currency = (
+        locale_signals.get(
+            "primary_currency"
+        )
+    )
+
+    symbol = (
+        locale_signals.get(
+            "primary_currency_symbol"
+        )
+    )
+
+    if not currency:
+        return {
+            "currency": "USD",
+            "symbol": "$",
+            "min": minimum,
+            "max": maximum,
+            "formatted": (
+                f"${minimum:,} - "
+                f"${maximum:,}"
+            ),
+            "source": "default",
+        }
+
+    localized_min, localized_max = (
+        convert_usd_project_value(
+            minimum,
+            maximum,
+            currency,
+        )
+    )
+
+    return {
+        "currency": currency,
+        "symbol": symbol,
+        "min": localized_min,
+        "max": localized_max,
+        "formatted": (
+            f"{format_currency_value(
+                localized_min,
+                currency,
+                symbol,
+            )}"
+            f" - "
+            f"{format_currency_value(
+                localized_max,
+                currency,
+                symbol,
+            )}"
+        ),
+        "source": locale_signals.get(
+            "currency_source",
+            "unknown",
+        ),
+    }
+
+
+# =========================================================
 # SALES INTELLIGENCE
 # =========================================================
 
@@ -2441,6 +3083,26 @@ def generate_sales_intel(
     trackers = data.get(
         "trackers",
         {},
+    )
+
+    locale_signals = data.get(
+        "locale_signals",
+        {},
+    )
+
+    business_name = clean_business_name_candidate(
+        data.get(
+            "business_name",
+            "",
+        )
+    )
+
+    business_name_confidence = int(
+        data.get(
+            "business_name_confidence",
+            0,
+        )
+        or 0
     )
 
     # =====================================================
@@ -2658,7 +3320,7 @@ def generate_sales_intel(
 
     opportunity_score = 0
 
-    # Conversion gaps
+    # Conversion gaps.
     if not conversion.get(
         "has_cta"
     ):
@@ -2706,7 +3368,7 @@ def generate_sales_intel(
             "Create a dedicated enquiry, booking or quote path"
         )
 
-    # SEO gaps
+    # SEO gaps.
     if not meta_description:
         opportunity_score += 5
         opportunity_reasons.append(
@@ -2747,7 +3409,7 @@ def generate_sales_intel(
             "Add a professional Open Graph/social sharing image"
         )
 
-    # Marketing
+    # Marketing.
     if not trackers.get(
         "google_analytics"
     ):
@@ -2770,7 +3432,7 @@ def generate_sales_intel(
             "Add Meta tracking if paid social acquisition is relevant"
         )
 
-    # Commercial intent
+    # Commercial intent.
     if commercial_keyword_count >= 10:
         opportunity_score += 9
         opportunity_reasons.append(
@@ -2794,7 +3456,7 @@ def generate_sales_intel(
     elif navigation_signals >= 1:
         opportunity_score += 2
 
-    # Health contribution
+    # Health contribution.
     if website_score < 50:
         opportunity_score += 12
     elif website_score < 65:
@@ -2806,7 +3468,7 @@ def generate_sales_intel(
     elif website_score < 92:
         opportunity_score += 2
 
-    # Contact evidence
+    # Contact evidence.
     if data.get("emails"):
         opportunity_score += 2
 
@@ -2817,6 +3479,14 @@ def generate_sales_intel(
         "has_whatsapp"
     ):
         opportunity_score += 2
+
+    # Low-confidence company name should not artificially
+    # increase commercial relevance.
+    if (
+        business_name_confidence >= 75
+        and business_name
+    ):
+        opportunity_score += 1
 
     opportunity_score = max(
         0,
@@ -2945,6 +3615,7 @@ def generate_sales_intel(
         project_value = {
             "min": 1000,
             "max": 2500,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -2967,6 +3638,7 @@ def generate_sales_intel(
         project_value = {
             "min": 750,
             "max": 1500,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -2989,6 +3661,7 @@ def generate_sales_intel(
         project_value = {
             "min": 600,
             "max": 1200,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -3011,6 +3684,7 @@ def generate_sales_intel(
         project_value = {
             "min": 500,
             "max": 1000,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -3030,6 +3704,7 @@ def generate_sales_intel(
         project_value = {
             "min": 500,
             "max": 900,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -3049,6 +3724,7 @@ def generate_sales_intel(
         project_value = {
             "min": 250,
             "max": 500,
+            "currency": "USD",
         }
 
         service_reason = (
@@ -3056,19 +3732,63 @@ def generate_sales_intel(
             "were detected."
         )
 
+    localized_project_value = (
+        build_localized_project_value(
+            project_value["min"],
+            project_value["max"],
+            locale_signals,
+        )
+    )
+
+    primary_currency = (
+        locale_signals.get(
+            "primary_currency"
+        )
+        or "USD"
+    )
+
+    primary_currency_symbol = (
+        locale_signals.get(
+            "primary_currency_symbol"
+        )
+        or "$"
+    )
+
+    # Display the localized range while preserving
+    # the original USD values internally.
+    if (
+        localized_project_value.get(
+            "currency"
+        )
+        and localized_project_value.get(
+            "currency"
+        ) != "USD"
+    ):
+        suggested_price_localized = (
+            localized_project_value.get(
+                "formatted"
+            )
+        )
+    else:
+        suggested_price_localized = (
+            suggested_price
+        )
+
     # =====================================================
     # OUTREACH
     # =====================================================
 
-    business_name = clean_business_name_candidate(
-        data.get(
-            "business_name",
-            "",
+    outreach_business_name = (
+        business_name
+        if (
+            business_name
+            and business_name_confidence >= 60
+            and not looks_generic_business_name(
+                business_name
+            )
         )
+        else "your company"
     )
-
-    if not business_name:
-        business_name = "your business"
 
     pitch_reason = (
         "your website's lead-generation flow"
@@ -3080,7 +3800,7 @@ def generate_sales_intel(
     )
 
     pitch = (
-        f"Hi, I was reviewing {business_name}'s website "
+        f"Hi, I was reviewing {outreach_business_name}'s website "
         f"and noticed {pitch_reason}. "
         f"I found a few areas where the customer journey "
         f"could be clearer and easier for potential customers "
@@ -3111,7 +3831,14 @@ def generate_sales_intel(
 
         "suggested_offer": suggested_offer,
         "suggested_price": suggested_price,
+        "suggested_price_localized": (
+            suggested_price_localized
+        ),
+
         "project_value": project_value,
+        "localized_project_value": (
+            localized_project_value
+        ),
 
         "lead_type": lead_type,
         "lead_type_confidence": lead_type_confidence,
@@ -3186,6 +3913,27 @@ async def process_single_url(
         ) = extract_business_name(
             soup
         )
+
+        # V6 fallback:
+        # if extraction returned CTA/noise, infer from domain.
+        if (
+            not business_name
+            or looks_generic_business_name(
+                business_name
+            )
+        ):
+            inferred_name = (
+                infer_business_name_from_domain(
+                    final_url
+                )
+            )
+
+            if inferred_name:
+                business_name = inferred_name
+                business_name_source = (
+                    "domain_inference"
+                )
+                business_name_confidence = 55
 
         # -------------------------------------------------
         # Meta
@@ -3577,7 +4325,29 @@ async def generate_website(
         str(
             business_name
         )
-    ) or "Your Business"
+    )
+
+    if (
+        not business_name
+        or looks_generic_business_name(
+            business_name
+        )
+    ):
+        business_name = (
+            payload.get(
+                "domain"
+            )
+            or "Your Business"
+        )
+
+        business_name = (
+            infer_business_name_from_domain(
+                str(
+                    business_name
+                )
+            )
+            or "Your Business"
+        )
 
     title = business_name
 
@@ -4364,9 +5134,9 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "5.0.0",
+        "version": "6.0.0",
         "message": (
-            "Global Sales Intelligence Engine"
+            "Global Sales Intelligence + Data Quality Engine"
         ),
     }
 
