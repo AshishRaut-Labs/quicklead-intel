@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.1.0",
+    version="6.1.1",
 )
 
 app.add_middleware(
@@ -64,7 +64,7 @@ PHONE_CANDIDATE_REGEX = re.compile(
     r"""
     (?<!\d)
     (?:
-        \+\d{1,3}[\s.\-()]*
+        \+\d{1,3}[\s.\-()]* 
     )?
     (?:\d[\s.\-()]*){7,15}
     (?!\d)
@@ -736,13 +736,13 @@ def clean_business_name_candidate(
         r"\s*[|•·]\s*.*$",
         "",
         value,
-    ).strip()
+    )
 
     value = re.sub(
         r"\s+[-–—:]\s+.*$",
         "",
         value,
-    ).strip()
+    )
 
     value = re.sub(
         r"\b(?:download|read|learn|view)\s+"
@@ -957,19 +957,61 @@ def infer_business_name_from_domain(
     if not hostname:
         return ""
 
-    words = re.split(
-        r"[-_]+",
+    suffixes = [
+        "manufacturing",
+        "manufacturer",
+        "engineering",
+        "engineerings",
+        "technology",
+        "technologies",
+        "solutions",
+        "consulting",
+        "consultancy",
+        "construction",
+        "contractor",
+        "contractors",
+        "distributor",
+        "distributors",
+        "wholesale",
+        "supplier",
+        "suppliers",
+        "logistics",
+        "software",
+        "digital",
+        "marketing",
+        "services",
+        "service",
+        "dental",
+        "dentist",
+        "clinic",
+        "hospital",
+        "restaurant",
+        "hotel",
+        "realestate",
+        "property",
+        "finance",
+        "financial",
+        "insurance",
+        "accounting",
+        "architect",
+        "architecture",
+        "automotive",
+        "academy",
+        "school",
+        "education",
+    ]
+
+    normalized_hostname = re.sub(
+        r"(?:group|company|corp|corporation|inc|ltd|limited|llc)$",
+        "",
         hostname,
+        flags=re.I,
     )
 
-    if len(words) == 1:
-        parts = re.findall(
-            r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)|\d+",
-            words[0],
-        )
-
-        if parts:
-            words = parts
+    words = re.split(
+        r"[-_]+",
+        normalized_hostname,
+    )
 
     words = [
         word.strip()
@@ -977,12 +1019,89 @@ def infer_business_name_from_domain(
         if word.strip()
     ]
 
-    if not words:
+    if len(words) == 1:
+
+        original_word = words[0]
+
+        for suffix in sorted(
+            suffixes,
+            key=len,
+            reverse=True,
+        ):
+
+            if not original_word.endswith(
+                suffix
+            ):
+                continue
+
+            prefix = original_word[
+                : -len(suffix)
+            ]
+
+            if not prefix:
+                continue
+
+            normalized_suffix = suffix
+
+            if normalized_suffix == "engineerings":
+                normalized_suffix = "engineering"
+
+            elif normalized_suffix == "contractors":
+                normalized_suffix = "contractor"
+
+            elif normalized_suffix == "distributors":
+                normalized_suffix = "distributor"
+
+            elif normalized_suffix == "suppliers":
+                normalized_suffix = "supplier"
+
+            words = [
+                prefix,
+                normalized_suffix,
+            ]
+
+            break
+
+        else:
+
+            parts = re.findall(
+                r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\b)|\d+",
+                original_word,
+            )
+
+            if parts:
+                words = parts
+
+    cleaned_words = []
+
+    for word in words:
+
+        word = re.sub(
+            r"[^a-zA-Z0-9&'.’]+",
+            "",
+            word,
+        )
+
+        if not word:
+            continue
+
+        if (
+            len(word) <= 3
+            and word.isalpha()
+        ):
+            formatted = word.upper()
+        else:
+            formatted = word.capitalize()
+
+        cleaned_words.append(
+            formatted
+        )
+
+    if not cleaned_words:
         return ""
 
     result = " ".join(
-        word.capitalize()
-        for word in words
+        cleaned_words
     )
 
     if looks_generic_business_name(
@@ -991,6 +1110,51 @@ def infer_business_name_from_domain(
         return ""
 
     return result
+
+
+def business_name_matches_domain(
+    business_name: str,
+    inferred_name: str,
+) -> bool:
+
+    current = clean_business_name_candidate(
+        business_name
+    ).casefold()
+
+    inferred = clean_business_name_candidate(
+        inferred_name
+    ).casefold()
+
+    if not current or not inferred:
+        return False
+
+    if current == inferred:
+        return True
+
+    current_words = set(
+        re.findall(
+            r"[a-z0-9]+",
+            current,
+        )
+    )
+
+    inferred_words = set(
+        re.findall(
+            r"[a-z0-9]+",
+            inferred,
+        )
+    )
+
+    if not current_words or not inferred_words:
+        return False
+
+    overlap = current_words.intersection(
+        inferred_words
+    )
+
+    return bool(
+        overlap
+    )
 
 
 # =========================================================
@@ -1012,6 +1176,7 @@ def extract_business_name(
     for item in iter_jsonld_objects(
         soup
     ):
+
         schema_type = item.get(
             "@type"
         )
@@ -1021,6 +1186,7 @@ def extract_business_name(
             str,
         ):
             types = [schema_type]
+
         elif isinstance(
             schema_type,
             list,
@@ -1029,6 +1195,7 @@ def extract_business_name(
                 str(v)
                 for v in schema_type
             ]
+
         else:
             types = []
 
@@ -1044,6 +1211,7 @@ def extract_business_name(
             "legalName",
             "alternateName",
         ]:
+
             value = item.get(
                 field
             )
@@ -1052,6 +1220,7 @@ def extract_business_name(
                 value,
                 str,
             ):
+
                 cleaned = clean_business_name_candidate(
                     value
                 )
@@ -1066,6 +1235,7 @@ def extract_business_name(
                         cleaned
                     )
                 ):
+
                     confidence = (
                         92
                         if field == "alternateName"
@@ -1093,6 +1263,7 @@ def extract_business_name(
             brand,
             str,
         ):
+
             cleaned = clean_business_name_candidate(
                 brand
             )
@@ -1107,6 +1278,7 @@ def extract_business_name(
                     cleaned
                 )
             ):
+
                 candidates.append(
                     (
                         cleaned,
@@ -1119,6 +1291,7 @@ def extract_business_name(
             brand,
             dict,
         ):
+
             brand_name = brand.get(
                 "name"
             )
@@ -1127,6 +1300,7 @@ def extract_business_name(
                 brand_name,
                 str,
             ):
+
                 cleaned = clean_business_name_candidate(
                     brand_name
                 )
@@ -1141,6 +1315,7 @@ def extract_business_name(
                         cleaned
                     )
                 ):
+
                     candidates.append(
                         (
                             cleaned,
@@ -1157,6 +1332,7 @@ def extract_business_name(
             logo,
             dict,
         ):
+
             logo_name = logo.get(
                 "name"
             )
@@ -1165,6 +1341,7 @@ def extract_business_name(
                 logo_name,
                 str,
             ):
+
                 cleaned = clean_business_name_candidate(
                     logo_name
                 )
@@ -1179,6 +1356,7 @@ def extract_business_name(
                         cleaned
                     )
                 ):
+
                     candidates.append(
                         (
                             cleaned,
@@ -1188,7 +1366,7 @@ def extract_business_name(
                     )
 
     # -----------------------------------------------------
-    # Explicit visible brand mentions
+    # Visible brand mentions
     # -----------------------------------------------------
 
     brand_candidates: list[str] = []
@@ -1218,6 +1396,7 @@ def extract_business_name(
             "span",
         ]
     ):
+
         element_text = clean_text(
             element.get_text(
                 " ",
@@ -1232,13 +1411,13 @@ def extract_business_name(
             continue
 
         for pattern in brand_patterns:
+
             for match in pattern.finditer(
                 element_text
             ):
-                candidate = (
-                    clean_business_name_candidate(
-                        match.group(1)
-                    )
+
+                candidate = clean_business_name_candidate(
+                    match.group(1)
                 )
 
                 if (
@@ -1253,9 +1432,11 @@ def extract_business_name(
                     )
 
     if brand_candidates:
+
         counts: dict[str, int] = {}
 
         for candidate in brand_candidates:
+
             key = candidate.casefold()
 
             counts[key] = (
@@ -1269,6 +1450,7 @@ def extract_business_name(
         for candidate in set(
             brand_candidates
         ):
+
             occurrence_count = counts.get(
                 candidate.casefold(),
                 0,
@@ -1278,6 +1460,7 @@ def extract_business_name(
 
             if occurrence_count >= 3:
                 confidence = 95
+
             elif occurrence_count >= 2:
                 confidence = 93
 
@@ -1290,12 +1473,13 @@ def extract_business_name(
             )
 
     # -----------------------------------------------------
-    # Image alt / title brand signals
+    # Image alt / title / aria-label
     # -----------------------------------------------------
 
     for image in soup.find_all(
         "img"
     ):
+
         attributes = [
             image.get("alt"),
             image.get("title"),
@@ -1303,6 +1487,7 @@ def extract_business_name(
         ]
 
         for raw_value in attributes:
+
             if not isinstance(
                 raw_value,
                 str,
@@ -1352,6 +1537,7 @@ def extract_business_name(
     ]
 
     for selector in logo_selectors:
+
         element = soup.select_one(
             selector
         )
@@ -1389,7 +1575,7 @@ def extract_business_name(
             )
 
     # -----------------------------------------------------
-    # OpenGraph site name
+    # OpenGraph
     # -----------------------------------------------------
 
     og_site_name = soup.find(
@@ -1400,6 +1586,7 @@ def extract_business_name(
     )
 
     if og_site_name:
+
         value = og_site_name.get(
             "content"
         )
@@ -1408,6 +1595,7 @@ def extract_business_name(
             value,
             str,
         ):
+
             cleaned = clean_business_name_candidate(
                 value
             )
@@ -1419,6 +1607,7 @@ def extract_business_name(
                     cleaned
                 )
             ):
+
                 confidence = 91
 
                 if is_likely_descriptive_business_name(
@@ -1435,12 +1624,13 @@ def extract_business_name(
                 )
 
     # -----------------------------------------------------
-    # Schema itemprop name
+    # Schema itemprop
     # -----------------------------------------------------
 
     for element in soup.select(
         '[itemprop="name"]'
     ):
+
         text = clean_text(
             element.get_text(
                 " ",
@@ -1459,6 +1649,7 @@ def extract_business_name(
                 cleaned
             )
         ):
+
             confidence = 85
 
             if is_likely_descriptive_business_name(
@@ -1482,6 +1673,7 @@ def extract_business_name(
         "application-name",
         "publisher",
     ]:
+
         tag = soup.find(
             "meta",
             attrs={
@@ -1500,6 +1692,7 @@ def extract_business_name(
             value,
             str,
         ):
+
             cleaned = clean_business_name_candidate(
                 value
             )
@@ -1511,6 +1704,7 @@ def extract_business_name(
                     cleaned
                 )
             ):
+
                 candidates.append(
                     (
                         cleaned,
@@ -1531,6 +1725,7 @@ def extract_business_name(
         "footer",
         "[class*='footer']",
     ]:
+
         footer = soup.select_one(
             selector
         )
@@ -1551,6 +1746,7 @@ def extract_business_name(
         ]
 
         for pattern in copyright_patterns:
+
             matches = re.findall(
                 pattern,
                 text,
@@ -1558,6 +1754,7 @@ def extract_business_name(
             )
 
             for match in matches:
+
                 cleaned = clean_business_name_candidate(
                     match
                 )
@@ -1579,6 +1776,7 @@ def extract_business_name(
                         cleaned
                     )
                 ):
+
                     footer_candidates.append(
                         (
                             cleaned,
@@ -1594,6 +1792,7 @@ def extract_business_name(
                 "p",
             ],
         ):
+
             child_text = clean_text(
                 child.get_text(
                     " ",
@@ -1634,6 +1833,7 @@ def extract_business_name(
                     cleaned
                 )
             ):
+
                 footer_candidates.append(
                     (
                         cleaned,
@@ -1642,6 +1842,7 @@ def extract_business_name(
                 )
 
     for candidate, quality in footer_candidates:
+
         candidates.append(
             (
                 candidate,
@@ -1654,36 +1855,18 @@ def extract_business_name(
         )
 
     # -----------------------------------------------------
-    # Domain inference
-    # -----------------------------------------------------
-
-    inferred_name = infer_business_name_from_domain(
-        get_domain(
-            ""
-        )
-    )
-
-    # Domain inference is intentionally handled later
-    # in process_single_url where the final URL is known.
-
-    # -----------------------------------------------------
-    # Choose strongest business-name candidate
-    #
-    # IMPORTANT:
-    # Do not blindly return JSON-LD first.
-    # Descriptive names such as:
-    # "Dental Clinic in Nayapalli"
-    # should lose to a genuine brand signal such as:
-    # "Kalinga Dental".
+    # Choose strongest extracted candidate
     # -----------------------------------------------------
 
     if candidates:
+
         deduped: dict[
             str,
             tuple[str, str, int],
         ] = {}
 
         for candidate, source, confidence in candidates:
+
             key = candidate.casefold()
 
             existing = deduped.get(
@@ -1709,15 +1892,30 @@ def extract_business_name(
                 (
                     item[2]
                     + (
-                        8
+                        10
                         if item[1] in {
-                            "image_brand",
                             "page_brand",
                             "logo_or_brand",
                         }
                         and not is_likely_descriptive_business_name(
                             item[0]
                         )
+                        else 0
+                    )
+                    - (
+                        18
+                        if item[1] == "image_brand"
+                        and clean_business_name_candidate(
+                            item[0]
+                        ).casefold()
+                        in {
+                            "image",
+                            "logo",
+                            "banner",
+                            "picture",
+                            "photo",
+                            "graphic",
+                        }
                         else 0
                     )
                 ),
@@ -1736,11 +1934,13 @@ def extract_business_name(
     title = ""
 
     if soup.title:
+
         title = clean_text(
             soup.title.get_text()
         )
 
     if title:
+
         separators = [
             " | ",
             " - ",
@@ -1754,6 +1954,7 @@ def extract_business_name(
         ] = []
 
         for separator in separators:
+
             parts = [
                 clean_text(part)
                 for part in title.split(
@@ -1763,7 +1964,9 @@ def extract_business_name(
             ]
 
             if len(parts) >= 2:
+
                 for part in parts:
+
                     cleaned = clean_business_name_candidate(
                         part
                     )
@@ -1778,6 +1981,7 @@ def extract_business_name(
                             cleaned
                         )
                     ):
+
                         title_candidates.append(
                             (
                                 cleaned,
@@ -1786,6 +1990,7 @@ def extract_business_name(
                         )
 
         if title_candidates:
+
             title_candidates.sort(
                 key=lambda item: item[1],
                 reverse=True,
@@ -1830,6 +2035,24 @@ def get_phone_country(
     if not digits:
         return None
 
+    # India gets an explicit validation path because
+    # malformed scraped numbers such as:
+    # +865826263639
+    # +868658263639
+    # should never overpower a valid +91 number.
+    if (
+        len(digits) == 12
+        and digits.startswith("91")
+    ):
+
+        indian_local = digits[2:]
+
+        if (
+            len(indian_local) == 10
+            and indian_local[0] in "6789"
+        ):
+            return "IN"
+
     unique_codes = sorted(
         set(
             COUNTRY_DIAL_CODES.values()
@@ -1839,9 +2062,11 @@ def get_phone_country(
     )
 
     for code in unique_codes:
+
         if digits.startswith(
             code
         ):
+
             matches = [
                 country
                 for country, dial_code
@@ -1850,6 +2075,7 @@ def get_phone_country(
             ]
 
             if matches:
+
                 if code == "1":
                     return "US"
 
@@ -1880,6 +2106,7 @@ def is_plausible_phone_for_country(
         return False
 
     if country_hint == "IN":
+
         if len(digits) == 10:
             return digits[0] in "6789"
 
@@ -1887,6 +2114,7 @@ def is_plausible_phone_for_country(
             len(digits) == 12
             and digits.startswith("91")
         ):
+
             local = digits[2:]
 
             return (
@@ -1898,6 +2126,7 @@ def is_plausible_phone_for_country(
             len(digits) == 11
             and digits.startswith("0")
         ):
+
             local = digits[1:]
 
             if (
@@ -1910,6 +2139,7 @@ def is_plausible_phone_for_country(
             len(digits) == 12
             and digits.startswith("91")
         ):
+
             local = digits[2:]
 
             if (
@@ -1974,9 +2204,11 @@ def normalize_phone_for_country(
         )
 
         if country_hint == "IN":
+
             if digits.startswith(
                 "91"
             ):
+
                 local = digits[2:]
 
                 if (
@@ -1991,17 +2223,15 @@ def normalize_phone_for_country(
                 ):
                     return f"+{digits}"
 
-                return None
+            return None
 
         if detected_country:
-            return f"+{digits}"
-
-        if 8 <= len(digits) <= 15:
             return f"+{digits}"
 
         return None
 
     if country_hint:
+
         dial_code = COUNTRY_DIAL_CODES.get(
             country_hint
         )
@@ -2015,6 +2245,7 @@ def normalize_phone_for_country(
                 and len(digits)
                 >= len(dial_code) + 6
             ):
+
                 if is_plausible_phone_for_country(
                     digits,
                     country_hint,
@@ -2056,6 +2287,7 @@ def normalize_phone_for_country(
                     "0"
                 )
             ):
+
                 local_digits = local_digits.lstrip(
                     "0"
                 )
@@ -2074,6 +2306,7 @@ def normalize_phone_for_country(
                     country_hint,
                 )
             ):
+
                 return (
                     f"+{international}"
                 )
@@ -2099,6 +2332,7 @@ def extract_phone_numbers(
         "a",
         href=True,
     ):
+
         href = clean_text(
             anchor.get(
                 "href",
@@ -2109,6 +2343,7 @@ def extract_phone_numbers(
         if href.lower().startswith(
             "tel:"
         ):
+
             raw = urllib.parse.unquote(
                 href[4:]
             ).strip()
@@ -2119,6 +2354,7 @@ def extract_phone_numbers(
             )
 
             if normalized:
+
                 digits = re.sub(
                     r"\D",
                     "",
@@ -2126,6 +2362,7 @@ def extract_phone_numbers(
                 )
 
                 if digits not in seen_digits:
+
                     phones.append(
                         normalized
                     )
@@ -2145,19 +2382,25 @@ def extract_phone_numbers(
         "[class*='footer']",
         "[id*='footer']",
     ]:
+
         try:
+
             contact_regions.extend(
                 soup.select(
                     selector
                 )
             )
+
         except Exception:
             continue
 
     unique_region_ids = set()
 
     for region in contact_regions:
-        region_id = id(region)
+
+        region_id = id(
+            region
+        )
 
         if region_id in unique_region_ids:
             continue
@@ -2179,12 +2422,14 @@ def extract_phone_numbers(
         for candidate in PHONE_CANDIDATE_REGEX.findall(
             region_text
         ):
+
             normalized = normalize_phone_for_country(
                 candidate,
                 None,
             )
 
             if normalized:
+
                 digits = re.sub(
                     r"\D",
                     "",
@@ -2192,6 +2437,7 @@ def extract_phone_numbers(
                 )
 
                 if digits not in seen_digits:
+
                     phones.append(
                         normalized
                     )
@@ -2208,6 +2454,7 @@ def extract_phone_numbers(
     for match in PHONE_CANDIDATE_REGEX.finditer(
         visible_text
     ):
+
         candidate = clean_text(
             match.group(0)
         )
@@ -2225,6 +2472,7 @@ def extract_phone_numbers(
                 candidate,
             )
         ):
+
             context = visible_text[
                 max(
                     0,
@@ -2259,6 +2507,7 @@ def extract_phone_numbers(
         )
 
         if digits not in seen_digits:
+
             phones.append(
                 normalized
             )
@@ -2293,6 +2542,7 @@ def extract_contacts(
         "a",
         href=True,
     ):
+
         original_href = clean_text(
             anchor.get(
                 "href",
@@ -2307,6 +2557,7 @@ def extract_contacts(
             or "linkedin.com/in/" in href
             or "linkedin.com/showcase/" in href
         ):
+
             socials["linkedin"] = (
                 socials["linkedin"]
                 or original_href
@@ -2319,18 +2570,21 @@ def extract_contacts(
             )
             and "status" not in href
         ):
+
             socials["twitter"] = (
                 socials["twitter"]
                 or original_href
             )
 
         elif "instagram.com/" in href:
+
             socials["instagram"] = (
                 socials["instagram"]
                 or original_href
             )
 
         elif "facebook.com/" in href:
+
             socials["facebook"] = (
                 socials["facebook"]
                 or original_href
@@ -2355,6 +2609,7 @@ def extract_emails(
     seen: set[str] = set()
 
     for email in candidates:
+
         clean = email.strip().lower()
 
         if clean in seen:
@@ -2387,6 +2642,7 @@ def extract_emails(
         emails.append(
             clean
         )
+
         seen.add(
             clean
         )
@@ -2459,6 +2715,7 @@ def extract_conversion_signals(
             "input",
         ],
     ):
+
         text = (
             tag.get_text(
                 " ",
@@ -2489,11 +2746,13 @@ def extract_conversion_signals(
             keyword in text
             for keyword in CTA_KEYWORDS
         ):
+
             has_cta = True
 
             if len(
                 cta_examples
             ) < 6:
+
                 cta_examples.append(
                     text[:100]
                 )
@@ -2510,6 +2769,7 @@ def extract_conversion_signals(
                 "calendly",
             ]
         ):
+
             has_booking = True
 
     has_conversion_link = False
@@ -2518,6 +2778,7 @@ def extract_conversion_signals(
         "a",
         href=True,
     ):
+
         anchor_text = clean_text(
             anchor.get_text(
                 " ",
@@ -2540,6 +2801,7 @@ def extract_conversion_signals(
             keyword in combined
             for keyword in CONVERSION_LINK_KEYWORDS
         ):
+
             has_conversion_link = True
             break
 
@@ -2610,11 +2872,13 @@ def extract_technical_signals(
     html_language = None
 
     if html_tag:
+
         raw_lang = html_tag.get(
             "lang"
         )
 
         if raw_lang:
+
             html_language = clean_text(
                 raw_lang
             ).lower()
@@ -2665,7 +2929,9 @@ def extract_business_signals(
     commercial_matches: list[str] = []
 
     for keyword in COMMERCIAL_KEYWORDS:
+
         if keyword in combined:
+
             commercial_matches.append(
                 keyword
             )
@@ -2676,6 +2942,7 @@ def extract_business_signals(
         "a",
         href=True,
     ):
+
         text = clean_text(
             anchor.get_text(
                 " ",
@@ -2684,6 +2951,7 @@ def extract_business_signals(
         )
 
         if text:
+
             internal_links.append(
                 text.lower()
             )
@@ -2691,6 +2959,7 @@ def extract_business_signals(
     navigation_signals = 0
 
     for link_text in internal_links[:300]:
+
         if any(
             keyword in link_text
             for keyword in [
@@ -2861,10 +3130,12 @@ def extract_country_names(
     found: list[str] = []
 
     for name, code in COUNTRY_NAMES.items():
+
         if re.search(
             rf"\b{re.escape(name)}\b",
             lowered,
         ):
+
             found.append(
                 code
             )
@@ -2889,11 +3160,13 @@ def detect_locale_signals(
     language = None
 
     if html_tag:
+
         raw_lang = html_tag.get(
             "lang"
         )
 
         if raw_lang:
+
             language = clean_text(
                 raw_lang
             ).lower()
@@ -2904,6 +3177,7 @@ def detect_locale_signals(
     )
 
     if language and "-" in language:
+
         possible = language.rsplit(
             "-",
             1,
@@ -2916,6 +3190,7 @@ def detect_locale_signals(
                 TLD_COUNTRY_MAP.values()
             )
         ):
+
             language_country = possible
             language_country_confidence = (
                 "Weak"
@@ -2995,10 +3270,12 @@ def detect_locale_signals(
     currency_hints: list[str] = []
 
     for currency, patterns in currency_patterns.items():
+
         if any(
             pattern in text
             for pattern in patterns
         ):
+
             currency_hints.append(
                 currency
             )
@@ -3010,6 +3287,7 @@ def detect_locale_signals(
     )
 
     if "." in hostname:
+
         tld = hostname.rsplit(
             ".",
             1,
@@ -3032,24 +3310,72 @@ def detect_locale_signals(
     phone_countries: list[str] = []
 
     if phones:
+
         for phone in phones:
+
+            digits = re.sub(
+                r"\D",
+                "",
+                str(phone),
+            )
+
+            # Strong valid Indian mobile evidence.
+            if (
+                len(digits) == 12
+                and digits.startswith("91")
+            ):
+
+                indian_local = digits[2:]
+
+                if (
+                    len(indian_local) == 10
+                    and indian_local[0] in "6789"
+                ):
+
+                    phone_countries.append(
+                        "IN"
+                    )
+
+                    continue
+
             country = get_phone_country(
                 phone
             )
 
             if country:
+
                 phone_countries.append(
                     country
                 )
 
-    phone_country = (
-        max(
-            set(phone_countries),
-            key=phone_countries.count,
-        )
-        if phone_countries
-        else None
-    )
+    phone_country = None
+
+    if phone_countries:
+
+        # One valid Indian +91 mobile should beat malformed
+        # +86-looking copies scraped from the page.
+        if "IN" in phone_countries:
+
+            phone_country = "IN"
+
+        else:
+
+            counts: dict[str, int] = {}
+
+            for country in phone_countries:
+
+                counts[country] = (
+                    counts.get(
+                        country,
+                        0,
+                    )
+                    + 1
+                )
+
+            phone_country = max(
+                counts,
+                key=counts.get,
+            )
 
     evidence: dict[str, int] = {}
 
@@ -3098,6 +3424,7 @@ def detect_locale_signals(
     }
 
     for currency in currency_hints:
+
         add(
             currency_country.get(
                 currency
@@ -3116,6 +3443,7 @@ def detect_locale_signals(
         "link",
         href=True,
     ):
+
         hreflang = link.get(
             "hreflang"
         )
@@ -3128,6 +3456,7 @@ def detect_locale_signals(
         ).lower()
 
         if "-" in hreflang:
+
             possible = hreflang.rsplit(
                 "-",
                 1,
@@ -3139,6 +3468,7 @@ def detect_locale_signals(
                     TLD_COUNTRY_MAP.values()
                 )
             ):
+
                 hreflang_countries.append(
                     possible
                 )
@@ -3146,6 +3476,7 @@ def detect_locale_signals(
     for country in set(
         hreflang_countries
     ):
+
         add(
             country,
             18,
@@ -3160,6 +3491,7 @@ def detect_locale_signals(
     country_confidence = "Unknown"
 
     if evidence:
+
         country_hint = max(
             evidence,
             key=evidence.get,
@@ -3171,8 +3503,10 @@ def detect_locale_signals(
 
         if score >= 70:
             country_confidence = "High"
+
         elif score >= 35:
             country_confidence = "Medium"
+
         else:
             country_confidence = "Low"
 
@@ -3180,7 +3514,58 @@ def detect_locale_signals(
     primary_currency_symbol = None
     currency_source = "unknown"
 
-    if currency_hints:
+    # -----------------------------------------------------
+    # Currency selection
+    #
+    # When there is strong country evidence, prefer that
+    # country's currency over a weak/conflicting symbol.
+    # This prevents an Indian site containing a stray ¥
+    # symbol from becoming CNY.
+    # -----------------------------------------------------
+
+    country_currency = (
+        COUNTRY_CURRENCY_MAP.get(
+            country_hint
+        )
+        if country_hint
+        else None
+    )
+
+    strong_country_currency_match = False
+
+    if (
+        country_hint
+        and country_confidence in {
+            "High",
+            "Medium",
+        }
+        and country_currency
+    ):
+
+        expected_currency = country_currency[0]
+
+        expected_country = currency_country.get(
+            expected_currency
+        )
+
+        if expected_country == country_hint:
+            strong_country_currency_match = True
+
+    if (
+        strong_country_currency_match
+        and country_currency
+    ):
+
+        (
+            primary_currency,
+            primary_currency_symbol,
+        ) = country_currency
+
+        currency_source = (
+            "country_inferred"
+        )
+
+    elif currency_hints:
 
         primary_currency = (
             currency_hints[0]
@@ -3196,14 +3581,12 @@ def detect_locale_signals(
             "site_detected"
         )
 
-    elif country_hint in COUNTRY_CURRENCY_MAP:
+    elif country_currency:
 
         (
             primary_currency,
             primary_currency_symbol,
-        ) = COUNTRY_CURRENCY_MAP[
-            country_hint
-        ]
+        ) = country_currency
 
         currency_source = (
             "country_inferred"
@@ -3323,6 +3706,7 @@ def convert_usd_project_value(
 ) -> tuple[int, int]:
 
     if not currency:
+
         return (
             minimum,
             maximum,
@@ -3333,6 +3717,7 @@ def convert_usd_project_value(
     )
 
     if not rate:
+
         return (
             minimum,
             maximum,
@@ -3398,6 +3783,7 @@ def build_localized_project_value(
     )
 
     if not currency:
+
         return {
             "currency": "USD",
             "symbol": "$",
@@ -3473,6 +3859,7 @@ def generate_sales_intel(
     )
 
     try:
+
         h1_count = int(
             data.get(
                 "h1_count",
@@ -3480,10 +3867,12 @@ def generate_sales_intel(
             )
             or 0
         )
+
     except (
         TypeError,
         ValueError,
     ):
+
         h1_count = 0
 
     conversion = data.get(
@@ -3522,18 +3911,24 @@ def generate_sales_intel(
         raw_business_name_confidence,
         int,
     ):
+
         business_name_confidence = (
             raw_business_name_confidence
         )
+
     else:
+
         try:
+
             business_name_confidence = int(
                 raw_business_name_confidence
             )
+
         except (
             TypeError,
             ValueError,
         ):
+
             business_name_confidence = 0
 
     # =====================================================
@@ -3543,34 +3938,49 @@ def generate_sales_intel(
     seo_score = 35
 
     if not title:
+
         seo_score -= 15
+
         problems.append(
             "Missing page title"
         )
+
     elif len(title) < 10:
+
         seo_score -= 8
+
         problems.append(
             "Weak page title"
         )
 
     if not meta_description:
+
         seo_score -= 10
+
         problems.append(
             "Missing meta description"
         )
+
     elif len(meta_description) < 50:
+
         seo_score -= 5
+
         problems.append(
             "Short or weak meta description"
         )
 
     if h1_count == 0:
+
         seo_score -= 10
+
         problems.append(
             "No H1 heading detected"
         )
+
     elif h1_count > 1:
+
         seo_score -= 5
+
         problems.append(
             "Multiple H1 headings"
         )
@@ -3613,7 +4023,9 @@ def generate_sales_intel(
     if not conversion.get(
         "has_cta"
     ):
+
         conversion_score -= 12
+
         problems.append(
             "No clear conversion CTA"
         )
@@ -3621,13 +4033,17 @@ def generate_sales_intel(
     if not conversion.get(
         "has_form"
     ):
+
         conversion_score -= 10
+
         problems.append(
             "No lead capture form"
         )
 
     if not has_contact_path:
+
         conversion_score -= 10
+
         problems.append(
             "No obvious contact path"
         )
@@ -3640,7 +4056,9 @@ def generate_sales_intel(
             "has_booking"
         )
     ):
+
         conversion_score -= 5
+
         problems.append(
             "No clear enquiry or booking path"
         )
@@ -3655,7 +4073,9 @@ def generate_sales_intel(
     if not technical.get(
         "has_viewport"
     ):
+
         technical_score -= 8
+
         problems.append(
             "Missing mobile viewport"
         )
@@ -3663,7 +4083,9 @@ def generate_sales_intel(
     if not technical.get(
         "has_canonical"
     ):
+
         technical_score -= 5
+
         problems.append(
             "Canonical URL not detected"
         )
@@ -3671,7 +4093,9 @@ def generate_sales_intel(
     if not technical.get(
         "has_favicon"
     ):
+
         technical_score -= 2
+
         problems.append(
             "Favicon not detected"
         )
@@ -3679,7 +4103,9 @@ def generate_sales_intel(
     if not technical.get(
         "has_ssl"
     ):
+
         technical_score -= 3
+
         problems.append(
             "HTTPS not detected"
         )
@@ -3688,7 +4114,9 @@ def generate_sales_intel(
         bool(value)
         for value in trackers.values()
     ):
+
         technical_score -= 7
+
         problems.append(
             "No marketing or analytics tracking detected"
         )
@@ -3722,6 +4150,7 @@ def generate_sales_intel(
     )
 
     try:
+
         commercial_keyword_count = int(
             business_signals.get(
                 "commercial_keyword_count",
@@ -3729,13 +4158,16 @@ def generate_sales_intel(
             )
             or 0
         )
+
     except (
         TypeError,
         ValueError,
     ):
+
         commercial_keyword_count = 0
 
     try:
+
         navigation_signals = int(
             business_signals.get(
                 "commercial_navigation_signals",
@@ -3743,17 +4175,24 @@ def generate_sales_intel(
             )
             or 0
         )
+
     except (
         TypeError,
         ValueError,
     ):
+
         navigation_signals = 0
 
     if commercial_keyword_count >= 10:
+
         commercial_intent = "HIGH"
+
     elif commercial_keyword_count >= 5:
+
         commercial_intent = "MEDIUM"
+
     else:
+
         commercial_intent = "LOW"
 
     # =====================================================
@@ -3765,10 +4204,13 @@ def generate_sales_intel(
     if not conversion.get(
         "has_cta"
     ):
+
         opportunity_score += 12
+
         opportunity_reasons.append(
             "No clear conversion CTA"
         )
+
         recommendations.append(
             "Add a strong primary CTA for the main customer action"
         )
@@ -3776,19 +4218,25 @@ def generate_sales_intel(
     if not conversion.get(
         "has_form"
     ):
+
         opportunity_score += 16
+
         opportunity_reasons.append(
             "No lead capture form"
         )
+
         recommendations.append(
             "Add an enquiry or lead form"
         )
 
     if not has_contact_path:
+
         opportunity_score += 9
+
         opportunity_reasons.append(
             "Weak contact accessibility"
         )
+
         recommendations.append(
             "Make phone, email, WhatsApp or enquiry options more prominent"
         )
@@ -3801,28 +4249,37 @@ def generate_sales_intel(
             "has_booking"
         )
     ):
+
         opportunity_score += 7
+
         opportunity_reasons.append(
             "No clear enquiry or booking path"
         )
+
         recommendations.append(
             "Create a dedicated enquiry, booking or quote path"
         )
 
     if not meta_description:
+
         opportunity_score += 5
+
         opportunity_reasons.append(
             "Missing meta description"
         )
+
         recommendations.append(
             "Rewrite the meta title and meta description for search and conversion"
         )
 
     if h1_count == 0:
+
         opportunity_score += 5
+
         opportunity_reasons.append(
             "Missing H1 structure"
         )
+
         recommendations.append(
             "Create a clear primary H1 focused on the main service or offer"
         )
@@ -3830,10 +4287,13 @@ def generate_sales_intel(
     if not technical.get(
         "has_canonical"
     ):
+
         opportunity_score += 2
+
         opportunity_reasons.append(
             "Canonical URL not detected"
         )
+
         recommendations.append(
             "Add canonical URL and strengthen technical SEO"
         )
@@ -3841,10 +4301,13 @@ def generate_sales_intel(
     if not data.get(
         "og_image"
     ):
+
         opportunity_score += 3
+
         opportunity_reasons.append(
             "No social sharing image detected"
         )
+
         recommendations.append(
             "Add a professional Open Graph/social sharing image"
         )
@@ -3852,10 +4315,13 @@ def generate_sales_intel(
     if not trackers.get(
         "google_analytics"
     ):
+
         opportunity_score += 2
+
         opportunity_reasons.append(
             "Google Analytics not detected"
         )
+
         recommendations.append(
             "Add analytics tracking to measure lead and visitor behaviour"
         )
@@ -3863,63 +4329,96 @@ def generate_sales_intel(
     if not trackers.get(
         "facebook_pixel"
     ):
+
         opportunity_score += 2
+
         opportunity_reasons.append(
             "Meta/Facebook Pixel not detected"
         )
+
         recommendations.append(
             "Add Meta tracking if paid social acquisition is relevant"
         )
 
     if commercial_keyword_count >= 10:
+
         opportunity_score += 9
+
         opportunity_reasons.append(
             "Strong commercial intent detected"
         )
+
     elif commercial_keyword_count >= 5:
+
         opportunity_score += 7
+
         opportunity_reasons.append(
             "Clear commercial intent detected"
         )
+
     elif commercial_keyword_count >= 3:
+
         opportunity_score += 5
+
         opportunity_reasons.append(
             "Commercial website intent detected"
         )
 
     if navigation_signals >= 5:
+
         opportunity_score += 6
+
     elif navigation_signals >= 3:
+
         opportunity_score += 4
+
     elif navigation_signals >= 1:
+
         opportunity_score += 2
 
     if website_score < 50:
+
         opportunity_score += 12
+
     elif website_score < 65:
+
         opportunity_score += 10
+
     elif website_score < 75:
+
         opportunity_score += 7
+
     elif website_score < 85:
+
         opportunity_score += 4
+
     elif website_score < 92:
+
         opportunity_score += 2
 
-    if data.get("emails"):
+    if data.get(
+        "emails"
+    ):
+
         opportunity_score += 2
 
-    if data.get("phones"):
+    if data.get(
+        "phones"
+    ):
+
         opportunity_score += 2
 
     if conversion.get(
         "has_whatsapp"
     ):
+
         opportunity_score += 2
 
     if (
         business_name_confidence >= 75
         and business_name
     ):
+
         opportunity_score += 1
 
     opportunity_score = max(
@@ -3954,6 +4453,7 @@ def generate_sales_intel(
             "has_cta"
         )
     ):
+
         best_sales_angle = (
             "Lead-generation redesign: make it easier "
             "for visitors to enquire."
@@ -3965,12 +4465,14 @@ def generate_sales_intel(
             "has_form"
         )
     ):
+
         best_sales_angle = (
             "High-intent commercial website with "
             "an obvious missed enquiry opportunity."
         )
 
     elif not meta_description or h1_count == 0:
+
         best_sales_angle = (
             "SEO and messaging improvements that can "
             "strengthen visibility and conversion."
@@ -3980,11 +4482,13 @@ def generate_sales_intel(
         bool(value)
         for value in trackers.values()
     ):
+
         best_sales_angle = (
             "Conversion tracking and marketing measurement."
         )
 
     else:
+
         best_sales_angle = (
             "Website growth and conversion optimization."
         )
@@ -3994,12 +4498,19 @@ def generate_sales_intel(
     # =====================================================
 
     if opportunity_score >= 75:
+
         opportunity_level = "HOT"
+
     elif opportunity_score >= 55:
+
         opportunity_level = "HIGH"
+
     elif opportunity_score >= 35:
+
         opportunity_level = "MEDIUM"
+
     else:
+
         opportunity_level = "LOW"
 
     # =====================================================
@@ -4038,6 +4549,7 @@ def generate_sales_intel(
         opportunity_score >= 75
         and has_major_conversion_gap
     ):
+
         suggested_offer = (
             "Website Redesign + Lead Generation System"
         )
@@ -4061,6 +4573,7 @@ def generate_sales_intel(
         opportunity_score >= 55
         and has_major_conversion_gap
     ):
+
         suggested_offer = (
             "Website Conversion Upgrade"
         )
@@ -4084,6 +4597,7 @@ def generate_sales_intel(
         opportunity_score >= 45
         and has_tracking_gap
     ):
+
         suggested_offer = (
             "Website + Analytics + Conversion Optimization"
         )
@@ -4107,6 +4621,7 @@ def generate_sales_intel(
         opportunity_score >= 35
         and has_major_seo_gap
     ):
+
         suggested_offer = (
             "SEO + Website Conversion Improvements"
         )
@@ -4127,6 +4642,7 @@ def generate_sales_intel(
         )
 
     elif opportunity_score >= 35:
+
         suggested_offer = (
             "Website Growth Optimization"
         )
@@ -4147,6 +4663,7 @@ def generate_sales_intel(
         )
 
     else:
+
         suggested_offer = (
             "Website Review / Minor Optimization"
         )
@@ -4196,12 +4713,15 @@ def generate_sales_intel(
             "currency"
         ) != "USD"
     ):
+
         suggested_price_localized = (
             localized_project_value.get(
                 "formatted"
             )
         )
+
     else:
+
         suggested_price_localized = (
             suggested_price
         )
@@ -4310,6 +4830,7 @@ async def process_single_url(
         return None
 
     try:
+
         response = await client.get(
             target_url,
             headers=HEADERS,
@@ -4336,6 +4857,7 @@ async def process_single_url(
         title = ""
 
         if soup.title:
+
             title = clean_text(
                 soup.title.get_text()
             )
@@ -4352,16 +4874,19 @@ async def process_single_url(
             name_result,
             tuple,
         ):
+
             business_name = ""
             business_name_source = "unknown"
             business_name_confidence = 0
 
         elif len(name_result) < 3:
+
             business_name = ""
             business_name_source = "unknown"
             business_name_confidence = 0
 
         else:
+
             business_name = name_result[0]
             second_value = name_result[1]
             third_value = name_result[2]
@@ -4376,10 +4901,12 @@ async def process_single_url(
                     str,
                 )
             ):
+
                 business_name_source = third_value
                 business_name_confidence = second_value
 
             else:
+
                 business_name_source = second_value
                 business_name_confidence = third_value
 
@@ -4394,47 +4921,177 @@ async def process_single_url(
             business_name_source,
             str,
         ):
+
             business_name_source = "unknown"
 
         if isinstance(
             business_name_confidence,
             bool,
         ):
+
             business_name_confidence = int(
                 business_name_confidence
             )
+
         elif not isinstance(
             business_name_confidence,
             int,
         ):
+
             try:
+
                 business_name_confidence = int(
                     business_name_confidence
                 )
+
             except (
                 TypeError,
                 ValueError,
             ):
+
                 business_name_confidence = 0
 
-        if (
+        # -------------------------------------------------
+        # Domain is a strong independent brand signal.
+        # -------------------------------------------------
+
+        inferred_domain_name = (
+            infer_business_name_from_domain(
+                final_url
+            )
+        )
+
+        current_name_is_descriptive = (
+            is_likely_descriptive_business_name(
+                business_name
+            )
+            if business_name
+            else True
+        )
+
+        visual_or_weak_source = (
+            business_name_source
+            in {
+                "image_brand",
+                "logo_or_brand",
+                "og_site_name",
+                "footer",
+                "title_inference",
+                "itemprop_name",
+                "meta_application-name",
+                "meta_publisher",
+            }
+        )
+
+        current_name_is_suspicious = (
             not business_name
             or looks_generic_business_name(
                 business_name
             )
-        ):
-            inferred_name = (
-                infer_business_name_from_domain(
-                    final_url
-                )
-            )
+            or len(
+                clean_business_name_candidate(
+                    business_name
+                ).split()
+            ) > 5
+        )
 
-            if inferred_name:
-                business_name = inferred_name
+        domain_name_is_valid = (
+            bool(
+                inferred_domain_name
+            )
+            and not looks_generic_business_name(
+                inferred_domain_name
+            )
+            and name_quality(
+                inferred_domain_name
+            ) >= 50
+        )
+
+        if domain_name_is_valid:
+
+            # Descriptive extracted names should lose to
+            # the actual domain brand.
+            if current_name_is_descriptive:
+
+                business_name = (
+                    inferred_domain_name
+                )
+
                 business_name_source = (
                     "domain_inference"
                 )
-                business_name_confidence = 55
+
+                business_name_confidence = 82
+
+            # Generic/visual/footer/title names such as
+            # "Image" or developer names should lose to
+            # a strong business-domain signal.
+            elif (
+                visual_or_weak_source
+                and not business_name_matches_domain(
+                    business_name,
+                    inferred_domain_name,
+                )
+            ):
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference_verified"
+                )
+
+                business_name_confidence = 82
+
+            elif current_name_is_suspicious:
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference"
+                )
+
+                business_name_confidence = 80
+
+            elif business_name_matches_domain(
+                business_name,
+                inferred_domain_name,
+            ):
+
+                business_name_confidence = max(
+                    business_name_confidence,
+                    92,
+                )
+
+            # A suspicious third-party/developer brand can
+            # disagree with the actual domain brand.
+            elif (
+                business_name_source
+                not in {
+                    "json_ld_name",
+                    "json_ld_legalName",
+                    "json_ld_alternateName",
+                    "json_ld_brand",
+                }
+                and not business_name_matches_domain(
+                    business_name,
+                    inferred_domain_name,
+                )
+                and business_name_confidence <= 90
+            ):
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference_verified"
+                )
+
+                business_name_confidence = 82
 
         # -------------------------------------------------
         # Meta
@@ -4464,6 +5121,7 @@ async def process_single_url(
         meta_description = ""
 
         if meta_tag:
+
             content = meta_tag.get(
                 "content"
             )
@@ -4472,6 +5130,7 @@ async def process_single_url(
                 content,
                 str,
             ):
+
                 meta_description = clean_text(
                     content
                 )
@@ -4514,6 +5173,7 @@ async def process_single_url(
         og_image = None
 
         if og_image_tag:
+
             content = og_image_tag.get(
                 "content"
             )
@@ -4522,6 +5182,7 @@ async def process_single_url(
                 content,
                 str,
             ):
+
                 og_image = clean_text(
                     content
                 )
@@ -4569,12 +5230,15 @@ async def process_single_url(
             "[class*='footer']",
             "[id*='footer']",
         ]:
+
             try:
+
                 contact_regions.extend(
                     soup.select(
                         selector
                     )
                 )
+
             except Exception:
                 continue
 
@@ -4583,6 +5247,7 @@ async def process_single_url(
         )
 
         for region in contact_regions:
+
             region_text = clean_text(
                 region.get_text(
                     " ",
@@ -4591,6 +5256,7 @@ async def process_single_url(
             )
 
             if region_text:
+
                 raw_phone_candidates.extend(
                     PHONE_CANDIDATE_REGEX.findall(
                         region_text
@@ -4601,6 +5267,7 @@ async def process_single_url(
             "a",
             href=True,
         ):
+
             href = clean_text(
                 anchor.get(
                     "href",
@@ -4611,6 +5278,7 @@ async def process_single_url(
             if href.lower().startswith(
                 "tel:"
             ):
+
                 raw_phone_candidates.append(
                     urllib.parse.unquote(
                         href[4:]
@@ -4620,12 +5288,14 @@ async def process_single_url(
         seen_normalized = set()
 
         for phone in raw_phone_candidates:
+
             normalized = normalize_phone_for_country(
                 phone,
                 country_hint,
             )
 
             if normalized:
+
                 digits = re.sub(
                     r"\D",
                     "",
@@ -4636,6 +5306,7 @@ async def process_single_url(
                     digits
                     not in seen_normalized
                 ):
+
                     normalized_phones.append(
                         normalized
                     )
@@ -4753,6 +5424,7 @@ async def process_single_url(
         }
 
     except Exception as exc:
+
         return {
             "url": target_url,
             "status": "Failed",
@@ -4787,6 +5459,7 @@ async def scan_target(
             or result.get("status")
             == "Failed"
         ):
+
             raise HTTPException(
                 status_code=500,
                 detail=(
@@ -4820,6 +5493,7 @@ async def bulk_scan_targets(
     ]
 
     if not cleaned_urls:
+
         return {
             "results": []
         }
@@ -4836,7 +5510,9 @@ async def bulk_scan_targets(
         async def limited_scan(
             target: str
         ):
+
             async with semaphore:
+
                 return await process_single_url(
                     client,
                     target,
@@ -4891,6 +5567,7 @@ async def generate_website(
             business_name
         )
     ):
+
         business_name = (
             payload.get(
                 "domain"
@@ -5695,10 +6372,11 @@ footer {{
 
 @app.get("/")
 async def root():
+
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.1.0",
+        "version": "6.1.1",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
@@ -5710,6 +6388,7 @@ async def root():
 # =========================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(
