@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.1.1",
+    version="6.2.0",
 )
 
 app.add_middleware(
@@ -64,9 +64,44 @@ PHONE_CANDIDATE_REGEX = re.compile(
     r"""
     (?<!\d)
     (?:
-        \+\d{1,3}[\s.\-()]* 
+        \+\d{1,3}[\s.\-()]*
     )?
     (?:\d[\s.\-()]*){7,15}
+    (?!\d)
+    """,
+    re.VERBOSE,
+)
+
+# Explicit Indian international numbers.
+# This is intentionally separate from the generic phone regex.
+INDIA_PHONE_REGEX = re.compile(
+    r"""
+    (?<!\d)
+    \+91
+    [\s().-]*
+    (?:\d[\s().-]*){10}
+    (?!\d)
+    """,
+    re.VERBOSE,
+)
+
+INDIA_PHONE_WITHOUT_PLUS_REGEX = re.compile(
+    r"""
+    (?<!\d)
+    91
+    [\s().-]*
+    (?:\d[\s().-]*){10}
+    (?!\d)
+    """,
+    re.VERBOSE,
+)
+
+INDIA_LOCAL_MOBILE_REGEX = re.compile(
+    r"""
+    (?<!\d)
+    (?:0[\s().-]*)?
+    [6789]
+    (?:[\s().-]*\d){9}
     (?!\d)
     """,
     re.VERBOSE,
@@ -215,6 +250,12 @@ GENERIC_NAME_PATTERNS = {
     "site",
     "company",
     "your company",
+    "image",
+    "logo",
+    "banner",
+    "picture",
+    "photo",
+    "graphic",
 }
 
 BUSINESS_NAME_NOISE = {
@@ -249,6 +290,70 @@ BUSINESS_NAME_NOISE = {
     "privacy policy",
     "cookie policy",
     "terms of use",
+}
+
+# Words which are frequently picked up from ordinary
+# English sentences, image alt text or CTA copy.
+INVALID_STANDALONE_NAME_WORDS = {
+    "it",
+    "this",
+    "that",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "we",
+    "you",
+    "our",
+    "your",
+    "their",
+    "they",
+    "them",
+    "us",
+    "me",
+    "my",
+    "its",
+    "the",
+    "and",
+    "or",
+    "but",
+    "for",
+    "with",
+    "from",
+    "into",
+    "onto",
+    "about",
+    "after",
+    "before",
+    "over",
+    "under",
+    "more",
+    "less",
+    "new",
+    "best",
+    "better",
+    "great",
+    "top",
+    "leading",
+    "trusted",
+    "discover",
+    "explore",
+    "solutions",
+    "services",
+    "service",
+    "products",
+    "product",
+    "professional",
+    "professionals",
+    "business",
+    "businesses",
+    "company",
+    "companies",
+    "page",
+    "pages",
+    "team",
+    "welcome",
 }
 
 DESCRIPTIVE_NAME_WORDS = {
@@ -294,6 +399,74 @@ DESCRIPTIVE_NAME_WORDS = {
     "singapore",
     "dubai",
     "uae",
+}
+
+# Common Indian location / identity clues.
+# These are intentionally supplemental, not authoritative by themselves.
+INDIA_LOCATION_CLUES = {
+    "india",
+    "bharat",
+    "new delhi",
+    "delhi",
+    "mumbai",
+    "bombay",
+    "pune",
+    "bangalore",
+    "bengaluru",
+    "hyderabad",
+    "chennai",
+    "kolkata",
+    "calcutta",
+    "ahmedabad",
+    "surat",
+    "vadodara",
+    "baroda",
+    "jaipur",
+    "lucknow",
+    "bhubaneswar",
+    "bbsr",
+    "cuttack",
+    "rourkela",
+    "patna",
+    "ranchi",
+    "noida",
+    "gurugram",
+    "gurgaon",
+    "faridabad",
+    "coimbatore",
+    "kochi",
+    "thiruvananthapuram",
+    "visakhapatnam",
+    "vizag",
+    "nagpur",
+    "indore",
+    "mysore",
+    "mysuru",
+    "goa",
+    "odisha",
+    "orissa",
+    "karnataka",
+    "maharashtra",
+    "gujarat",
+    "tamil nadu",
+    "telangana",
+    "west bengal",
+    "rajasthan",
+    "kerala",
+    "uttar pradesh",
+    "uttarakhand",
+    "bihar",
+    "jharkhand",
+    "punjab",
+    "haryana",
+    "madhya pradesh",
+    "andhra pradesh",
+    "pin code",
+    "pincode",
+    "gstin",
+    "gst no",
+    "gst number",
+    "cin",
 }
 
 COUNTRY_NAMES = {
@@ -598,6 +771,7 @@ def normalize_url(raw_url: str) -> str:
 
 def get_domain(url: str) -> str:
     try:
+
         parsed = urllib.parse.urlparse(
             normalize_url(url)
         )
@@ -609,6 +783,7 @@ def get_domain(url: str) -> str:
             .split(":")[0]
             .removeprefix("www.")
         )
+
     except Exception:
         return ""
 
@@ -620,6 +795,7 @@ def get_domain(url: str) -> str:
 def clean_text(
     value: Optional[str],
 ) -> str:
+
     if not value:
         return ""
 
@@ -651,6 +827,9 @@ def looks_generic_business_name(
         return True
 
     if text in BUSINESS_NAME_NOISE:
+        return True
+
+    if text in INVALID_STANDALONE_NAME_WORDS:
         return True
 
     if re.fullmatch(
@@ -695,6 +874,16 @@ def looks_generic_business_name(
         return True
 
     if len(text.split()) > 8:
+        return True
+
+    # A single ordinary English word is almost never
+    # enough evidence to call something a company name.
+    words = text.split()
+
+    if (
+        len(words) == 1
+        and text in INVALID_STANDALONE_NAME_WORDS
+    ):
         return True
 
     return False
@@ -795,10 +984,12 @@ def name_quality(
         score += 10
 
     for descriptive_word in DESCRIPTIVE_NAME_WORDS:
+
         if re.search(
             rf"\b{re.escape(descriptive_word)}\b",
             lowered,
         ):
+
             score -= 12
 
     if re.search(
@@ -806,6 +997,7 @@ def name_quality(
         r"singapore|dubai|uae|germany|france)\b",
         lowered,
     ):
+
         score -= 15
 
     if len(value) > 70:
@@ -836,10 +1028,12 @@ def is_likely_descriptive_business_name(
     descriptive_hits = 0
 
     for word in DESCRIPTIVE_NAME_WORDS:
+
         if re.search(
             rf"\b{re.escape(word)}\b",
             lowered,
         ):
+
             descriptive_hits += 1
 
     return descriptive_hits >= 1
@@ -864,6 +1058,7 @@ def iter_jsonld_objects(
             )
         },
     ):
+
         raw = (
             script.string
             or script.get_text()
@@ -873,9 +1068,11 @@ def iter_jsonld_objects(
             continue
 
         try:
+
             parsed = json.loads(
                 raw
             )
+
         except Exception:
             continue
 
@@ -883,6 +1080,7 @@ def iter_jsonld_objects(
             parsed,
             dict,
         ):
+
             objects.append(
                 parsed
             )
@@ -895,6 +1093,7 @@ def iter_jsonld_objects(
                 graph,
                 list,
             ):
+
                 objects.extend(
                     item
                     for item in graph
@@ -908,6 +1107,7 @@ def iter_jsonld_objects(
             parsed,
             list,
         ):
+
             objects.extend(
                 item
                 for item in parsed
@@ -936,10 +1136,13 @@ def infer_business_name_from_domain(
         return ""
 
     if "://" in value:
+
         domain = get_domain(
             value
         )
+
     else:
+
         domain = (
             value
             .split("/")[0]
@@ -1089,8 +1292,11 @@ def infer_business_name_from_domain(
             len(word) <= 3
             and word.isalpha()
         ):
+
             formatted = word.upper()
+
         else:
+
             formatted = word.capitalize()
 
         cleaned_words.append(
@@ -1158,6 +1364,61 @@ def business_name_matches_domain(
 
 
 # =========================================================
+# EMAIL DOMAIN IDENTITY
+# =========================================================
+
+def infer_business_name_from_email(
+    email: str,
+) -> str:
+
+    value = clean_text(
+        email
+    ).lower()
+
+    if "@" not in value:
+        return ""
+
+    domain = value.split(
+        "@",
+        1,
+    )[1]
+
+    return infer_business_name_from_domain(
+        domain
+    )
+
+
+def is_generic_email_local_part(
+    local_part: str,
+) -> bool:
+
+    normalized = clean_text(
+        local_part
+    ).lower()
+
+    return normalized in {
+        "info",
+        "hello",
+        "support",
+        "sales",
+        "contact",
+        "office",
+        "admin",
+        "enquiry",
+        "inquiry",
+        "marketing",
+        "care",
+        "help",
+        "service",
+        "services",
+        "hr",
+        "jobs",
+        "career",
+        "careers",
+    }
+
+
+# =========================================================
 # BUSINESS NAME
 # =========================================================
 
@@ -1185,18 +1446,23 @@ def extract_business_name(
             schema_type,
             str,
         ):
-            types = [schema_type]
+
+            types = [
+                schema_type
+            ]
 
         elif isinstance(
             schema_type,
             list,
         ):
+
             types = [
                 str(v)
                 for v in schema_type
             ]
 
         else:
+
             types = []
 
         if not any(
@@ -1216,44 +1482,46 @@ def extract_business_name(
                 field
             )
 
-            if isinstance(
+            if not isinstance(
                 value,
                 str,
             ):
+                continue
 
-                cleaned = clean_business_name_candidate(
-                    value
-                )
+            cleaned = clean_business_name_candidate(
+                value
+            )
 
-                quality = name_quality(
+            quality = name_quality(
+                cleaned
+            )
+
+            if (
+                quality >= 35
+                and not looks_generic_business_name(
                     cleaned
                 )
+            ):
 
-                if (
-                    quality >= 35
-                    and not looks_generic_business_name(
-                        cleaned
-                    )
+                confidence = (
+                    92
+                    if field == "alternateName"
+                    else 95
+                )
+
+                if is_likely_descriptive_business_name(
+                    cleaned
                 ):
 
-                    confidence = (
-                        92
-                        if field == "alternateName"
-                        else 95
-                    )
+                    confidence -= 20
 
-                    if is_likely_descriptive_business_name(
-                        cleaned
-                    ):
-                        confidence -= 20
-
-                    candidates.append(
-                        (
-                            cleaned,
-                            f"json_ld_{field}",
-                            confidence,
-                        )
+                candidates.append(
+                    (
+                        cleaned,
+                        f"json_ld_{field}",
+                        confidence,
                     )
+                )
 
         brand = item.get(
             "brand"
@@ -1283,7 +1551,7 @@ def extract_business_name(
                     (
                         cleaned,
                         "json_ld_brand",
-                        94,
+                        96,
                     )
                 )
 
@@ -1320,7 +1588,7 @@ def extract_business_name(
                         (
                             cleaned,
                             "json_ld_brand",
-                            96,
+                            98,
                         )
                     )
 
@@ -1366,7 +1634,71 @@ def extract_business_name(
                     )
 
     # -----------------------------------------------------
-    # Visible brand mentions
+    # Meta site identity
+    # -----------------------------------------------------
+
+    for property_name in [
+        "og:site_name",
+        "twitter:title",
+    ]:
+
+        tag = soup.find(
+            "meta",
+            attrs={
+                "property": property_name
+            },
+        )
+
+        if not tag:
+
+            tag = soup.find(
+                "meta",
+                attrs={
+                    "name": property_name
+                },
+            )
+
+        if not tag:
+            continue
+
+        value = tag.get(
+            "content"
+        )
+
+        if not isinstance(
+            value,
+            str,
+        ):
+            continue
+
+        cleaned = clean_business_name_candidate(
+            value
+        )
+
+        if (
+            name_quality(cleaned) >= 45
+            and not looks_generic_business_name(
+                cleaned
+            )
+        ):
+
+            confidence = 91
+
+            if is_likely_descriptive_business_name(
+                cleaned
+            ):
+                confidence = 74
+
+            candidates.append(
+                (
+                    cleaned,
+                    "meta_site_identity",
+                    confidence,
+                )
+            )
+
+    # -----------------------------------------------------
+    # Explicit visible brand mentions
     # -----------------------------------------------------
 
     brand_candidates: list[str] = []
@@ -1427,6 +1759,7 @@ def extract_business_name(
                     )
                     and name_quality(candidate) >= 40
                 ):
+
                     brand_candidates.append(
                         candidate
                     )
@@ -1456,13 +1789,13 @@ def extract_business_name(
                 0,
             )
 
-            confidence = 88
+            confidence = 86
 
             if occurrence_count >= 3:
-                confidence = 95
+                confidence = 94
 
             elif occurrence_count >= 2:
-                confidence = 93
+                confidence = 91
 
             candidates.append(
                 (
@@ -1474,6 +1807,9 @@ def extract_business_name(
 
     # -----------------------------------------------------
     # Image alt / title / aria-label
+    #
+    # This is deliberately lower confidence.
+    # Image attributes frequently contain generic words.
     # -----------------------------------------------------
 
     for image in soup.find_all(
@@ -1510,14 +1846,14 @@ def extract_business_name(
             ):
                 continue
 
-            if name_quality(cleaned) < 40:
+            if name_quality(cleaned) < 45:
                 continue
 
             candidates.append(
                 (
                     cleaned,
                     "image_brand",
-                    91,
+                    70,
                 )
             )
 
@@ -1566,6 +1902,7 @@ def extract_business_name(
                 cleaned
             )
         ):
+
             candidates.append(
                 (
                     cleaned,
@@ -1575,56 +1912,7 @@ def extract_business_name(
             )
 
     # -----------------------------------------------------
-    # OpenGraph
-    # -----------------------------------------------------
-
-    og_site_name = soup.find(
-        "meta",
-        attrs={
-            "property": "og:site_name"
-        },
-    )
-
-    if og_site_name:
-
-        value = og_site_name.get(
-            "content"
-        )
-
-        if isinstance(
-            value,
-            str,
-        ):
-
-            cleaned = clean_business_name_candidate(
-                value
-            )
-
-            if (
-                name_quality(cleaned)
-                >= 40
-                and not looks_generic_business_name(
-                    cleaned
-                )
-            ):
-
-                confidence = 91
-
-                if is_likely_descriptive_business_name(
-                    cleaned
-                ):
-                    confidence = 75
-
-                candidates.append(
-                    (
-                        cleaned,
-                        "og_site_name",
-                        confidence,
-                    )
-                )
-
-    # -----------------------------------------------------
-    # Schema itemprop
+    # itemprop name
     # -----------------------------------------------------
 
     for element in soup.select(
@@ -1655,6 +1943,7 @@ def extract_business_name(
             if is_likely_descriptive_business_name(
                 cleaned
             ):
+
                 confidence = 72
 
             candidates.append(
@@ -1855,7 +2144,10 @@ def extract_business_name(
         )
 
     # -----------------------------------------------------
-    # Choose strongest extracted candidate
+    # Choose strongest structured candidate.
+    #
+    # Image signals are intentionally weighted lower.
+    # Ordinary one-word text signals are rejected.
     # -----------------------------------------------------
 
     if candidates:
@@ -1867,6 +2159,15 @@ def extract_business_name(
 
         for candidate, source, confidence in candidates:
 
+            candidate = clean_business_name_candidate(
+                candidate
+            )
+
+            if looks_generic_business_name(
+                candidate
+            ):
+                continue
+
             key = candidate.casefold()
 
             existing = deduped.get(
@@ -1877,6 +2178,7 @@ def extract_business_name(
                 existing is None
                 or confidence > existing[2]
             ):
+
                 deduped[key] = (
                     candidate,
                     source,
@@ -1889,35 +2191,35 @@ def extract_business_name(
 
         ranked_candidates.sort(
             key=lambda item: (
-                (
-                    item[2]
-                    + (
-                        10
-                        if item[1] in {
-                            "page_brand",
-                            "logo_or_brand",
-                        }
-                        and not is_likely_descriptive_business_name(
-                            item[0]
-                        )
-                        else 0
+                item[2]
+                + (
+                    10
+                    if item[1] == "json_ld_brand"
+                    else 0
+                )
+                + (
+                    8
+                    if item[1] in {
+                        "json_ld_name",
+                        "json_ld_legalName",
+                    }
+                    else 0
+                )
+                + (
+                    6
+                    if item[1] in {
+                        "page_brand",
+                        "logo_or_brand",
+                    }
+                    and not is_likely_descriptive_business_name(
+                        item[0]
                     )
-                    - (
-                        18
-                        if item[1] == "image_brand"
-                        and clean_business_name_candidate(
-                            item[0]
-                        ).casefold()
-                        in {
-                            "image",
-                            "logo",
-                            "banner",
-                            "picture",
-                            "photo",
-                            "graphic",
-                        }
-                        else 0
-                    )
+                    else 0
+                )
+                - (
+                    20
+                    if item[1] == "image_brand"
+                    else 0
                 ),
                 name_quality(item[0]),
                 -len(item[0]),
@@ -1925,7 +2227,8 @@ def extract_business_name(
             reverse=True,
         )
 
-        return ranked_candidates[0]
+        if ranked_candidates:
+            return ranked_candidates[0]
 
     # -----------------------------------------------------
     # Title fallback
@@ -2035,22 +2338,19 @@ def get_phone_country(
     if not digits:
         return None
 
-    # India gets an explicit validation path because
-    # malformed scraped numbers such as:
-    # +865826263639
-    # +868658263639
-    # should never overpower a valid +91 number.
+    # Strong Indian mobile evidence.
     if (
         len(digits) == 12
         and digits.startswith("91")
     ):
 
-        indian_local = digits[2:]
+        local = digits[2:]
 
         if (
-            len(indian_local) == 10
-            and indian_local[0] in "6789"
+            len(local) == 10
+            and local[0] in "6789"
         ):
+
             return "IN"
 
     unique_codes = sorted(
@@ -2250,6 +2550,7 @@ def normalize_phone_for_country(
                     digits,
                     country_hint,
                 ):
+
                     return f"+{digits}"
 
             if country_hint == "IN":
@@ -2259,12 +2560,14 @@ def normalize_phone_for_country(
                 if local_digits.startswith(
                     "0"
                 ):
+
                     local_digits = local_digits[1:]
 
                 if (
                     len(local_digits) == 10
                     and local_digits[0] in "6789"
                 ):
+
                     return (
                         f"+91{local_digits}"
                     )
@@ -2273,6 +2576,7 @@ def normalize_phone_for_country(
                     len(local_digits) == 10
                     and local_digits[0] in "234"
                 ):
+
                     return (
                         f"+91{local_digits}"
                     )
@@ -2321,12 +2625,95 @@ def normalize_phone_for_country(
 # PHONE EXTRACTION
 # =========================================================
 
+def extract_explicit_india_phones(
+    html_content: str,
+) -> list[str]:
+
+    phones: list[str] = []
+    seen: set[str] = set()
+
+    # First: explicit +91 numbers.
+    for pattern in [
+        INDIA_PHONE_REGEX,
+        INDIA_PHONE_WITHOUT_PLUS_REGEX,
+    ]:
+
+        for match in pattern.findall(
+            html_content
+        ):
+
+            candidate = clean_text(
+                match
+            )
+
+            normalized = normalize_phone_for_country(
+                candidate,
+                "IN",
+            )
+
+            if not normalized:
+                continue
+
+            digits = re.sub(
+                r"\D",
+                "",
+                normalized,
+            )
+
+            if digits not in seen:
+
+                phones.append(
+                    normalized
+                )
+
+                seen.add(
+                    digits
+                )
+
+    return phones
+
+
 def extract_phone_numbers(
     soup: BeautifulSoup,
+    html_content: str = "",
 ) -> list[str]:
 
     phones: list[str] = []
     seen_digits: set[str] = set()
+
+    # -----------------------------------------------------
+    # Strongest: explicit +91 numbers in raw HTML.
+    # -----------------------------------------------------
+
+    explicit_india_phones = (
+        extract_explicit_india_phones(
+            html_content
+        )
+        if html_content
+        else []
+    )
+
+    for phone in explicit_india_phones:
+
+        digits = re.sub(
+            r"\D",
+            "",
+            phone,
+        )
+
+        if digits not in seen_digits:
+
+            phones.append(
+                phone
+            )
+
+            seen_digits.add(
+                digits
+            )
+
+    # -----------------------------------------------------
+    # tel: links
+    # -----------------------------------------------------
 
     for anchor in soup.find_all(
         "a",
@@ -2370,6 +2757,10 @@ def extract_phone_numbers(
                     seen_digits.add(
                         digits
                     )
+
+    # -----------------------------------------------------
+    # Contact regions
+    # -----------------------------------------------------
 
     contact_regions = []
 
@@ -2445,6 +2836,10 @@ def extract_phone_numbers(
                     seen_digits.add(
                         digits
                     )
+
+    # -----------------------------------------------------
+    # Visible text
+    # -----------------------------------------------------
 
     visible_text = soup.get_text(
         " ",
@@ -2525,10 +2920,12 @@ def extract_phone_numbers(
 
 def extract_contacts(
     soup: BeautifulSoup,
+    html_content: str = "",
 ) -> tuple[list[str], dict]:
 
     phones = extract_phone_numbers(
-        soup
+        soup,
+        html_content,
     )
 
     socials = {
@@ -3147,10 +3544,36 @@ def extract_country_names(
     )
 
 
+def detect_india_location_score(
+    text: str,
+) -> int:
+
+    lowered = clean_text(
+        text
+    ).lower()
+
+    hits = 0
+
+    for clue in INDIA_LOCATION_CLUES:
+
+        if re.search(
+            rf"\b{re.escape(clue)}\b",
+            lowered,
+        ):
+
+            hits += 1
+
+    return min(
+        4,
+        hits,
+    )
+
+
 def detect_locale_signals(
     soup: BeautifulSoup,
     url: str,
     phones: Optional[list[str]] = None,
+    html_content: str = "",
 ) -> dict:
 
     html_tag = soup.find(
@@ -3172,6 +3595,7 @@ def detect_locale_signals(
             ).lower()
 
     language_country = None
+
     language_country_confidence = (
         "None"
     )
@@ -3192,6 +3616,7 @@ def detect_locale_signals(
         ):
 
             language_country = possible
+
             language_country_confidence = (
                 "Weak"
             )
@@ -3200,6 +3625,17 @@ def detect_locale_signals(
         " ",
         strip=True,
     )
+
+    if html_content:
+
+        combined_country_text = (
+            f"{text} "
+            f"{html_content[:50000]}"
+        )
+
+    else:
+
+        combined_country_text = text
 
     currency_patterns = {
         "USD": [
@@ -3272,7 +3708,7 @@ def detect_locale_signals(
     for currency, patterns in currency_patterns.items():
 
         if any(
-            pattern in text
+            pattern in combined_country_text
             for pattern in patterns
         ):
 
@@ -3298,7 +3734,7 @@ def detect_locale_signals(
     )
 
     explicit_countries = extract_country_names(
-        text[:40000]
+        combined_country_text[:70000]
     )
 
     explicit_country = (
@@ -3319,17 +3755,16 @@ def detect_locale_signals(
                 str(phone),
             )
 
-            # Strong valid Indian mobile evidence.
             if (
                 len(digits) == 12
                 and digits.startswith("91")
             ):
 
-                indian_local = digits[2:]
+                local = digits[2:]
 
                 if (
-                    len(indian_local) == 10
-                    and indian_local[0] in "6789"
+                    len(local) == 10
+                    and local[0] in "6789"
                 ):
 
                     phone_countries.append(
@@ -3348,12 +3783,41 @@ def detect_locale_signals(
                     country
                 )
 
+    # Explicit +91 source-level evidence.
+    html_india_phone_matches = []
+
+    if html_content:
+
+        html_india_phone_matches.extend(
+            INDIA_PHONE_REGEX.findall(
+                html_content
+            )
+        )
+
+        html_india_phone_matches.extend(
+            INDIA_PHONE_WITHOUT_PLUS_REGEX.findall(
+                html_content
+            )
+
+        )
+
+    if html_india_phone_matches:
+
+        phone_countries.extend(
+            ["IN"] * min(
+                4,
+                len(
+                    html_india_phone_matches
+                ),
+            )
+        )
+
     phone_country = None
 
     if phone_countries:
 
-        # One valid Indian +91 mobile should beat malformed
-        # +86-looking copies scraped from the page.
+        # Explicit Indian +91 evidence wins over ambiguous
+        # malformed generic international-looking candidates.
         if "IN" in phone_countries:
 
             phone_country = "IN"
@@ -3383,6 +3847,7 @@ def detect_locale_signals(
         country: Optional[str],
         weight: int,
     ):
+
         if not country:
             return
 
@@ -3403,6 +3868,24 @@ def detect_locale_signals(
         explicit_country,
         80,
     )
+
+    # Supplemental India location evidence.
+    india_location_score = detect_india_location_score(
+        combined_country_text[:70000]
+    )
+
+    if india_location_score:
+
+        evidence["IN"] = (
+            evidence.get(
+                "IN",
+                0,
+            )
+            + (
+                15
+                * india_location_score
+            )
+        )
 
     currency_country = {
         "USD": "US",
@@ -3514,15 +3997,6 @@ def detect_locale_signals(
     primary_currency_symbol = None
     currency_source = "unknown"
 
-    # -----------------------------------------------------
-    # Currency selection
-    #
-    # When there is strong country evidence, prefer that
-    # country's currency over a weak/conflicting symbol.
-    # This prevents an Indian site containing a stray ¥
-    # symbol from becoming CNY.
-    # -----------------------------------------------------
-
     country_currency = (
         COUNTRY_CURRENCY_MAP.get(
             country_hint
@@ -3549,6 +4023,7 @@ def detect_locale_signals(
         )
 
         if expected_country == country_hint:
+
             strong_country_currency_match = True
 
     if (
@@ -3567,6 +4042,8 @@ def detect_locale_signals(
 
     elif currency_hints:
 
+        # When site has a strong currency hint and
+        # country evidence is weak, use site evidence.
         primary_currency = (
             currency_hints[0]
         )
@@ -4952,7 +5429,7 @@ async def process_single_url(
                 business_name_confidence = 0
 
         # -------------------------------------------------
-        # Domain is a strong independent brand signal.
+        # Domain identity
         # -------------------------------------------------
 
         inferred_domain_name = (
@@ -4960,138 +5437,6 @@ async def process_single_url(
                 final_url
             )
         )
-
-        current_name_is_descriptive = (
-            is_likely_descriptive_business_name(
-                business_name
-            )
-            if business_name
-            else True
-        )
-
-        visual_or_weak_source = (
-            business_name_source
-            in {
-                "image_brand",
-                "logo_or_brand",
-                "og_site_name",
-                "footer",
-                "title_inference",
-                "itemprop_name",
-                "meta_application-name",
-                "meta_publisher",
-            }
-        )
-
-        current_name_is_suspicious = (
-            not business_name
-            or looks_generic_business_name(
-                business_name
-            )
-            or len(
-                clean_business_name_candidate(
-                    business_name
-                ).split()
-            ) > 5
-        )
-
-        domain_name_is_valid = (
-            bool(
-                inferred_domain_name
-            )
-            and not looks_generic_business_name(
-                inferred_domain_name
-            )
-            and name_quality(
-                inferred_domain_name
-            ) >= 50
-        )
-
-        if domain_name_is_valid:
-
-            # Descriptive extracted names should lose to
-            # the actual domain brand.
-            if current_name_is_descriptive:
-
-                business_name = (
-                    inferred_domain_name
-                )
-
-                business_name_source = (
-                    "domain_inference"
-                )
-
-                business_name_confidence = 82
-
-            # Generic/visual/footer/title names such as
-            # "Image" or developer names should lose to
-            # a strong business-domain signal.
-            elif (
-                visual_or_weak_source
-                and not business_name_matches_domain(
-                    business_name,
-                    inferred_domain_name,
-                )
-            ):
-
-                business_name = (
-                    inferred_domain_name
-                )
-
-                business_name_source = (
-                    "domain_inference_verified"
-                )
-
-                business_name_confidence = 82
-
-            elif current_name_is_suspicious:
-
-                business_name = (
-                    inferred_domain_name
-                )
-
-                business_name_source = (
-                    "domain_inference"
-                )
-
-                business_name_confidence = 80
-
-            elif business_name_matches_domain(
-                business_name,
-                inferred_domain_name,
-            ):
-
-                business_name_confidence = max(
-                    business_name_confidence,
-                    92,
-                )
-
-            # A suspicious third-party/developer brand can
-            # disagree with the actual domain brand.
-            elif (
-                business_name_source
-                not in {
-                    "json_ld_name",
-                    "json_ld_legalName",
-                    "json_ld_alternateName",
-                    "json_ld_brand",
-                }
-                and not business_name_matches_domain(
-                    business_name,
-                    inferred_domain_name,
-                )
-                and business_name_confidence <= 90
-            ):
-
-                business_name = (
-                    inferred_domain_name
-                )
-
-                business_name_source = (
-                    "domain_inference_verified"
-                )
-
-                business_name_confidence = 82
 
         # -------------------------------------------------
         # Meta
@@ -5192,7 +5537,8 @@ async def process_single_url(
         # -------------------------------------------------
 
         phones, socials = extract_contacts(
-            soup
+            soup,
+            html_content,
         )
 
         emails = extract_emails(
@@ -5200,13 +5546,319 @@ async def process_single_url(
         )
 
         # -------------------------------------------------
-        # First locale pass
+        # Email/domain identity candidates
+        # -------------------------------------------------
+
+        email_identity_candidates: list[
+            tuple[str, int]
+        ] = []
+
+        for email in emails:
+
+            if "@" not in email:
+                continue
+
+            local_part = email.split(
+                "@",
+                1,
+            )[0]
+
+            domain_name = infer_business_name_from_email(
+                email
+            )
+
+            if not domain_name:
+                continue
+
+            if is_generic_email_local_part(
+                local_part
+            ):
+
+                email_identity_candidates.append(
+                    (
+                        domain_name,
+                        74,
+                    )
+                )
+
+            else:
+
+                email_identity_candidates.append(
+                    (
+                        domain_name,
+                        78,
+                    )
+                )
+
+        email_identity_name = ""
+
+        if email_identity_candidates:
+
+            counts: dict[str, int] = {}
+
+            for candidate, _confidence in email_identity_candidates:
+
+                counts[candidate.casefold()] = (
+                    counts.get(
+                        candidate.casefold(),
+                        0,
+                    )
+                    + 1
+                )
+
+            email_identity_name = max(
+                email_identity_candidates,
+                key=lambda item: (
+                    counts.get(
+                        item[0].casefold(),
+                        0,
+                    ),
+                    item[1],
+                ),
+            )[0]
+
+        # -------------------------------------------------
+        # Identity validation
+        # -------------------------------------------------
+
+        current_name_is_invalid = (
+            not business_name
+            or looks_generic_business_name(
+                business_name
+            )
+        )
+
+        current_name_is_descriptive = (
+            is_likely_descriptive_business_name(
+                business_name
+            )
+            if business_name
+            else True
+        )
+
+        current_name_is_suspicious = (
+            current_name_is_invalid
+            or len(
+                clean_business_name_candidate(
+                    business_name
+                ).split()
+            ) > 5
+        )
+
+        domain_name_is_valid = (
+            bool(
+                inferred_domain_name
+            )
+            and not looks_generic_business_name(
+                inferred_domain_name
+            )
+            and name_quality(
+                inferred_domain_name
+            ) >= 50
+        )
+
+        email_identity_is_valid = (
+            bool(
+                email_identity_name
+            )
+            and not looks_generic_business_name(
+                email_identity_name
+            )
+        )
+
+        source_is_weak = (
+            business_name_source
+            in {
+                "image_brand",
+                "footer",
+                "title_inference",
+                "itemprop_name",
+                "meta_application-name",
+                "meta_publisher",
+            }
+        )
+
+        # -------------------------------------------------
+        # Strong fallback for false one-word names
+        #
+        # Examples:
+        #   It
+        #   What
+        #   This
+        # -------------------------------------------------
+
+        if current_name_is_invalid:
+
+            if email_identity_is_valid:
+
+                business_name = (
+                    email_identity_name
+                )
+
+                business_name_source = (
+                    "email_domain_inference"
+                )
+
+                business_name_confidence = 78
+
+            elif domain_name_is_valid:
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference"
+                )
+
+                business_name_confidence = 75
+
+        # -------------------------------------------------
+        # Descriptive page names lose to an actual domain
+        # identity unless structured data provides a strong
+        # explicit business/brand name.
+        # -------------------------------------------------
+
+        elif current_name_is_descriptive:
+
+            if (
+                business_name_source
+                not in {
+                    "json_ld_name",
+                    "json_ld_legalName",
+                    "json_ld_alternateName",
+                    "json_ld_brand",
+                }
+            ):
+
+                if domain_name_is_valid:
+
+                    business_name = (
+                        inferred_domain_name
+                    )
+
+                    business_name_source = (
+                        "domain_inference"
+                    )
+
+                    business_name_confidence = 82
+
+                elif email_identity_is_valid:
+
+                    business_name = (
+                        email_identity_name
+                    )
+
+                    business_name_source = (
+                        "email_domain_inference"
+                    )
+
+                    business_name_confidence = 78
+
+        # -------------------------------------------------
+        # Weak visual/page result loses to domain/email
+        # identity.
+        # -------------------------------------------------
+
+        elif (
+            source_is_weak
+            and business_name_confidence < 85
+        ):
+
+            if (
+                domain_name_is_valid
+                and not business_name_matches_domain(
+                    business_name,
+                    inferred_domain_name,
+                )
+            ):
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference_verified"
+                )
+
+                business_name_confidence = 82
+
+            elif (
+                email_identity_is_valid
+                and not business_name_matches_domain(
+                    business_name,
+                    email_identity_name,
+                )
+            ):
+
+                business_name = (
+                    email_identity_name
+                )
+
+                business_name_source = (
+                    "email_domain_inference"
+                )
+
+                business_name_confidence = 78
+
+        # -------------------------------------------------
+        # Keep strong JSON-LD business names.
+        #
+        # This intentionally allows something like
+        # "AB ConnectZ" to remain when structured data
+        # explicitly identifies it as the organization.
+        # -------------------------------------------------
+
+        # No overwrite here for:
+        # json_ld_name
+        # json_ld_legalName
+        # json_ld_alternateName
+        # json_ld_brand
+
+        # -------------------------------------------------
+        # Final safety check
+        # -------------------------------------------------
+
+        if (
+            not business_name
+            or looks_generic_business_name(
+                business_name
+            )
+        ):
+
+            if domain_name_is_valid:
+
+                business_name = (
+                    inferred_domain_name
+                )
+
+                business_name_source = (
+                    "domain_inference"
+                )
+
+                business_name_confidence = 75
+
+            elif email_identity_is_valid:
+
+                business_name = (
+                    email_identity_name
+                )
+
+                business_name_source = (
+                    "email_domain_inference"
+                )
+
+                business_name_confidence = 74
+
+        # -------------------------------------------------
+        # Locale first pass
         # -------------------------------------------------
 
         preliminary_locale = detect_locale_signals(
             soup,
             final_url,
             phones,
+            html_content,
         )
 
         country_hint = preliminary_locale.get(
@@ -5214,7 +5866,7 @@ async def process_single_url(
         )
 
         # -------------------------------------------------
-        # Normalize phones using country evidence
+        # Normalize phones with country evidence
         # -------------------------------------------------
 
         normalized_phones: list[str] = []
@@ -5244,6 +5896,13 @@ async def process_single_url(
 
         raw_phone_candidates = list(
             phones
+        )
+
+        # Explicit +91 values are always added first.
+        raw_phone_candidates.extend(
+            extract_explicit_india_phones(
+                html_content
+            )
         )
 
         for region in contact_regions:
@@ -5315,6 +5974,51 @@ async def process_single_url(
                         digits
                     )
 
+        # -------------------------------------------------
+        # If explicit +91 evidence exists, ensure those
+        # valid Indian numbers are not lost.
+        # -------------------------------------------------
+
+        if extract_explicit_india_phones(
+            html_content
+        ):
+
+            explicit_india = (
+                extract_explicit_india_phones(
+                    html_content
+                )
+            )
+
+            combined_phone_list = (
+                explicit_india
+                + normalized_phones
+            )
+
+            final_phone_list: list[str] = []
+            final_phone_digits: set[str] = set()
+
+            for phone in combined_phone_list:
+
+                digits = re.sub(
+                    r"\D",
+                    "",
+                    phone,
+                )
+
+                if digits not in final_phone_digits:
+
+                    final_phone_list.append(
+                        phone
+                    )
+
+                    final_phone_digits.add(
+                        digits
+                    )
+
+            normalized_phones = (
+                final_phone_list
+            )
+
         phones = normalized_phones[:8]
 
         # -------------------------------------------------
@@ -5325,6 +6029,7 @@ async def process_single_url(
             soup,
             final_url,
             phones,
+            html_content,
         )
 
         # -------------------------------------------------
@@ -6376,7 +7081,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.1.1",
+        "version": "6.2.0",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
