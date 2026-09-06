@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.0.2",
+    version="6.1.0",
 )
 
 app.add_middleware(
@@ -277,6 +277,7 @@ DESCRIPTIVE_NAME_WORDS = {
     "legal",
     "clinic",
     "dental",
+    "dentist",
     "restaurant",
     "hotel",
     "real estate",
@@ -794,7 +795,10 @@ def name_quality(
         score += 10
 
     for descriptive_word in DESCRIPTIVE_NAME_WORDS:
-        if descriptive_word in lowered:
+        if re.search(
+            rf"\b{re.escape(descriptive_word)}\b",
+            lowered,
+        ):
             score -= 12
 
     if re.search(
@@ -814,6 +818,31 @@ def name_quality(
             score,
         ),
     )
+
+
+def is_likely_descriptive_business_name(
+    value: str,
+) -> bool:
+
+    cleaned = clean_business_name_candidate(
+        value
+    )
+
+    if not cleaned:
+        return True
+
+    lowered = cleaned.lower()
+
+    descriptive_hits = 0
+
+    for word in DESCRIPTIVE_NAME_WORDS:
+        if re.search(
+            rf"\b{re.escape(word)}\b",
+            lowered,
+        ):
+            descriptive_hits += 1
+
+    return descriptive_hits >= 1
 
 
 # =========================================================
@@ -1013,6 +1042,7 @@ def extract_business_name(
         for field in [
             "name",
             "legalName",
+            "alternateName",
         ]:
             value = item.get(
                 field
@@ -1031,16 +1061,27 @@ def extract_business_name(
                 )
 
                 if (
-                    quality >= 50
+                    quality >= 35
                     and not looks_generic_business_name(
                         cleaned
                     )
                 ):
+                    confidence = (
+                        92
+                        if field == "alternateName"
+                        else 95
+                    )
+
+                    if is_likely_descriptive_business_name(
+                        cleaned
+                    ):
+                        confidence -= 20
+
                     candidates.append(
                         (
                             cleaned,
-                            "json_ld",
-                            95,
+                            f"json_ld_{field}",
+                            confidence,
                         )
                     )
 
@@ -1049,6 +1090,32 @@ def extract_business_name(
         )
 
         if isinstance(
+            brand,
+            str,
+        ):
+            cleaned = clean_business_name_candidate(
+                brand
+            )
+
+            quality = name_quality(
+                cleaned
+            )
+
+            if (
+                quality >= 40
+                and not looks_generic_business_name(
+                    cleaned
+                )
+            ):
+                candidates.append(
+                    (
+                        cleaned,
+                        "json_ld_brand",
+                        94,
+                    )
+                )
+
+        elif isinstance(
             brand,
             dict,
         ):
@@ -1069,7 +1136,7 @@ def extract_business_name(
                 )
 
                 if (
-                    quality >= 50
+                    quality >= 40
                     and not looks_generic_business_name(
                         cleaned
                     )
@@ -1078,33 +1145,51 @@ def extract_business_name(
                         (
                             cleaned,
                             "json_ld_brand",
-                            92,
+                            96,
                         )
                     )
 
-    if candidates:
-        candidates.sort(
-            key=lambda item: (
-                item[2],
-                name_quality(
-                    item[0]
-                ),
-            ),
-            reverse=True,
+        logo = item.get(
+            "logo"
         )
 
-        return candidates[0]
+        if isinstance(
+            logo,
+            dict,
+        ):
+            logo_name = logo.get(
+                "name"
+            )
+
+            if isinstance(
+                logo_name,
+                str,
+            ):
+                cleaned = clean_business_name_candidate(
+                    logo_name
+                )
+
+                quality = name_quality(
+                    cleaned
+                )
+
+                if (
+                    quality >= 40
+                    and not looks_generic_business_name(
+                        cleaned
+                    )
+                ):
+                    candidates.append(
+                        (
+                            cleaned,
+                            "json_ld_logo",
+                            88,
+                        )
+                    )
 
     # -----------------------------------------------------
     # Explicit visible brand mentions
     # -----------------------------------------------------
-
-    page_text = clean_text(
-        soup.get_text(
-            " ",
-            strip=True,
-        )
-    )
 
     brand_candidates: list[str] = []
 
@@ -1161,7 +1246,7 @@ def extract_business_name(
                     and not looks_generic_business_name(
                         candidate
                     )
-                    and name_quality(candidate) >= 45
+                    and name_quality(candidate) >= 40
                 ):
                     brand_candidates.append(
                         candidate
@@ -1181,103 +1266,78 @@ def extract_business_name(
                 + 1
             )
 
-        ranked_brand_candidates = sorted(
-            brand_candidates,
-            key=lambda item: (
-                counts.get(
-                    item.casefold(),
-                    0,
-                ),
-                name_quality(item),
-            ),
-            reverse=True,
-        )
-
-        if ranked_brand_candidates:
-            best_brand = ranked_brand_candidates[0]
-
-            return (
-                best_brand,
-                "page_brand",
-                94
-                if counts.get(
-                    best_brand.casefold(),
-                    0,
-                )
-                >= 2
-                else 90,
-            )
-
-    # -----------------------------------------------------
-    # OpenGraph site name
-    # -----------------------------------------------------
-
-    og_site_name = soup.find(
-        "meta",
-        attrs={
-            "property": "og:site_name"
-        },
-    )
-
-    if og_site_name:
-        value = og_site_name.get(
-            "content"
-        )
-
-        if isinstance(
-            value,
-            str,
+        for candidate in set(
+            brand_candidates
         ):
-            cleaned = clean_business_name_candidate(
-                value
+            occurrence_count = counts.get(
+                candidate.casefold(),
+                0,
             )
 
-            if (
-                name_quality(cleaned)
-                >= 45
-                and not looks_generic_business_name(
-                    cleaned
+            confidence = 88
+
+            if occurrence_count >= 3:
+                confidence = 95
+            elif occurrence_count >= 2:
+                confidence = 93
+
+            candidates.append(
+                (
+                    candidate,
+                    "page_brand",
+                    confidence,
                 )
-            ):
-                return (
-                    cleaned,
-                    "og_site_name",
-                    90,
-                )
+            )
 
     # -----------------------------------------------------
-    # Schema itemprop name
+    # Image alt / title brand signals
     # -----------------------------------------------------
 
-    for element in soup.select(
-        '[itemprop="name"]'
+    for image in soup.find_all(
+        "img"
     ):
-        text = clean_text(
-            element.get_text(
-                " ",
-                strip=True,
+        attributes = [
+            image.get("alt"),
+            image.get("title"),
+            image.get("aria-label"),
+        ]
+
+        for raw_value in attributes:
+            if not isinstance(
+                raw_value,
+                str,
+            ):
+                continue
+
+            cleaned = clean_business_name_candidate(
+                raw_value
             )
-        )
 
-        cleaned = clean_business_name_candidate(
-            text
-        )
+            if not (
+                2
+                <= len(cleaned)
+                <= 80
+            ):
+                continue
 
-        if (
-            name_quality(cleaned)
-            >= 50
-            and not looks_generic_business_name(
+            if looks_generic_business_name(
                 cleaned
-            )
-        ):
-            return (
-                cleaned,
-                "itemprop_name",
-                85,
+            ):
+                continue
+
+            if name_quality(cleaned) < 40:
+                continue
+
+            candidates.append(
+                (
+                    cleaned,
+                    "image_brand",
+                    91,
+                )
             )
 
     # -----------------------------------------------------
-    # Header / nav logo
+    # Logo / header textual signals
     # -----------------------------------------------------
 
     logo_selectors = [
@@ -1320,10 +1380,98 @@ def extract_business_name(
                 cleaned
             )
         ):
-            return (
-                cleaned,
-                "logo_or_brand",
-                82,
+            candidates.append(
+                (
+                    cleaned,
+                    "logo_or_brand",
+                    90,
+                )
+            )
+
+    # -----------------------------------------------------
+    # OpenGraph site name
+    # -----------------------------------------------------
+
+    og_site_name = soup.find(
+        "meta",
+        attrs={
+            "property": "og:site_name"
+        },
+    )
+
+    if og_site_name:
+        value = og_site_name.get(
+            "content"
+        )
+
+        if isinstance(
+            value,
+            str,
+        ):
+            cleaned = clean_business_name_candidate(
+                value
+            )
+
+            if (
+                name_quality(cleaned)
+                >= 40
+                and not looks_generic_business_name(
+                    cleaned
+                )
+            ):
+                confidence = 91
+
+                if is_likely_descriptive_business_name(
+                    cleaned
+                ):
+                    confidence = 75
+
+                candidates.append(
+                    (
+                        cleaned,
+                        "og_site_name",
+                        confidence,
+                    )
+                )
+
+    # -----------------------------------------------------
+    # Schema itemprop name
+    # -----------------------------------------------------
+
+    for element in soup.select(
+        '[itemprop="name"]'
+    ):
+        text = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        cleaned = clean_business_name_candidate(
+            text
+        )
+
+        if (
+            name_quality(cleaned)
+            >= 40
+            and not looks_generic_business_name(
+                cleaned
+            )
+        ):
+            confidence = 85
+
+            if is_likely_descriptive_business_name(
+                cleaned
+            ):
+                confidence = 72
+
+            candidates.append(
+                (
+                    cleaned,
+                    "itemprop_name",
+                    confidence,
+                )
             )
 
     # -----------------------------------------------------
@@ -1358,15 +1506,17 @@ def extract_business_name(
 
             if (
                 name_quality(cleaned)
-                >= 45
+                >= 40
                 and not looks_generic_business_name(
                     cleaned
                 )
             ):
-                return (
-                    cleaned,
-                    f"meta_{attr_name}",
-                    75,
+                candidates.append(
+                    (
+                        cleaned,
+                        f"meta_{attr_name}",
+                        78,
+                    )
                 )
 
     # -----------------------------------------------------
@@ -1491,35 +1641,93 @@ def extract_business_name(
                     )
                 )
 
-    if footer_candidates:
-        unique: dict[str, int] = {}
-
-        for candidate, quality in footer_candidates:
-            unique[candidate] = max(
-                unique.get(
-                    candidate,
-                    0,
+    for candidate, quality in footer_candidates:
+        candidates.append(
+            (
+                candidate,
+                "footer",
+                min(
+                    80,
+                    quality + 10,
                 ),
-                quality,
+            )
+        )
+
+    # -----------------------------------------------------
+    # Domain inference
+    # -----------------------------------------------------
+
+    inferred_name = infer_business_name_from_domain(
+        get_domain(
+            ""
+        )
+    )
+
+    # Domain inference is intentionally handled later
+    # in process_single_url where the final URL is known.
+
+    # -----------------------------------------------------
+    # Choose strongest business-name candidate
+    #
+    # IMPORTANT:
+    # Do not blindly return JSON-LD first.
+    # Descriptive names such as:
+    # "Dental Clinic in Nayapalli"
+    # should lose to a genuine brand signal such as:
+    # "Kalinga Dental".
+    # -----------------------------------------------------
+
+    if candidates:
+        deduped: dict[
+            str,
+            tuple[str, str, int],
+        ] = {}
+
+        for candidate, source, confidence in candidates:
+            key = candidate.casefold()
+
+            existing = deduped.get(
+                key
             )
 
-        ranked = sorted(
-            unique.items(),
+            if (
+                existing is None
+                or confidence > existing[2]
+            ):
+                deduped[key] = (
+                    candidate,
+                    source,
+                    confidence,
+                )
+
+        ranked_candidates = list(
+            deduped.values()
+        )
+
+        ranked_candidates.sort(
             key=lambda item: (
-                item[1],
+                (
+                    item[2]
+                    + (
+                        8
+                        if item[1] in {
+                            "image_brand",
+                            "page_brand",
+                            "logo_or_brand",
+                        }
+                        and not is_likely_descriptive_business_name(
+                            item[0]
+                        )
+                        else 0
+                    )
+                ),
+                name_quality(item[0]),
                 -len(item[0]),
             ),
             reverse=True,
         )
 
-        if ranked:
-            candidate = ranked[0][0]
-
-            return (
-                candidate,
-                "footer",
-                70,
-            )
+        return ranked_candidates[0]
 
     # -----------------------------------------------------
     # Title fallback
@@ -1759,10 +1967,6 @@ def normalize_phone_for_country(
         "+"
     )
 
-    # -----------------------------------------------------
-    # Already international.
-    # -----------------------------------------------------
-
     if has_plus:
 
         detected_country = get_phone_country(
@@ -1796,10 +2000,6 @@ def normalize_phone_for_country(
             return f"+{digits}"
 
         return None
-
-    # -----------------------------------------------------
-    # Country-aware local conversion.
-    # -----------------------------------------------------
 
     if country_hint:
         dial_code = COUNTRY_DIAL_CODES.get(
@@ -1878,10 +2078,6 @@ def normalize_phone_for_country(
                     f"+{international}"
                 )
 
-    # -----------------------------------------------------
-    # No country available.
-    # -----------------------------------------------------
-
     if 8 <= len(digits) <= 15:
         return digits
 
@@ -1899,7 +2095,6 @@ def extract_phone_numbers(
     phones: list[str] = []
     seen_digits: set[str] = set()
 
-    # High confidence: tel links.
     for anchor in soup.find_all(
         "a",
         href=True,
@@ -1938,10 +2133,6 @@ def extract_phone_numbers(
                     seen_digits.add(
                         digits
                     )
-
-    # -----------------------------------------------------
-    # Contact-region extraction.
-    # -----------------------------------------------------
 
     contact_regions = []
 
@@ -2008,10 +2199,6 @@ def extract_phone_numbers(
                     seen_digits.add(
                         digits
                     )
-
-    # -----------------------------------------------------
-    # Whole-page fallback.
-    # -----------------------------------------------------
 
     visible_text = soup.get_text(
         " ",
@@ -4161,16 +4348,6 @@ async def process_single_url(
             soup
         )
 
-        # -------------------------------------------------
-        # Defensive compatibility handling.
-        #
-        # Correct tuple:
-        # (business_name, source, confidence)
-        #
-        # Legacy broken tuple:
-        # (business_name, confidence, source)
-        # -------------------------------------------------
-
         if not isinstance(
             name_result,
             tuple,
@@ -4199,20 +4376,12 @@ async def process_single_url(
                     str,
                 )
             ):
-                # Legacy tuple:
-                # (name, 95, "json_ld")
                 business_name_source = third_value
                 business_name_confidence = second_value
 
             else:
-                # Correct tuple:
-                # (name, "json_ld", 95)
                 business_name_source = second_value
                 business_name_confidence = third_value
-
-        # -------------------------------------------------
-        # Final type safety for name fields
-        # -------------------------------------------------
 
         business_name = clean_text(
             str(
@@ -5529,7 +5698,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.0.2",
+        "version": "6.1.0",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
