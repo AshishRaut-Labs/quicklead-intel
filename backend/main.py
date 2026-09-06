@@ -901,6 +901,39 @@ def looks_generic_business_name(
     if len(text.split()) > 8:
         return True
 
+        # Reject sentence-like fragments that are unlikely to be
+    # legitimate company names.
+    sentence_fragment_words = {
+        "a", "an", "the", "is", "are", "was", "were",
+        "be", "been", "being", "to", "of", "in", "on",
+        "at", "by", "for", "from", "with", "that", "this",
+        "which", "who", "what", "how", "why", "when",
+        "where", "can", "could", "will", "would", "should",
+        "has", "have", "had", "do", "does", "did",
+        "and", "or", "but", "as", "than", "into",
+        "about", "more", "less", "not", "your", "our",
+        "their", "its", "new", "all",
+    }
+
+    words = text.split()
+
+    sentence_word_hits = sum(
+        1
+        for word in words
+        if word in sentence_fragment_words
+    )
+
+    if len(words) >= 3 and sentence_word_hits >= 2:
+        return True
+
+    if len(words) >= 3 and words[-1] in {
+        "that", "this", "which", "who", "what",
+        "and", "or", "to", "of", "for", "with",
+        "from", "in", "on", "at", "by", "as",
+        "is", "are", "was", "were", "be",
+    }:
+        return True
+    
     # A single ordinary English word is almost never
     # enough evidence to call something a company name.
     words = text.split()
