@@ -1,16 +1,16 @@
-# QuickLead Intel V3 - Global Sales Intelligence Engine
+# QuickLead Intel V4 - Global Sales Intelligence Engine
 
 import asyncio
 import html as html_lib
+import json
 import re
 import urllib.parse
 from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from html import escape
 
 
 # =========================================================
@@ -19,9 +19,8 @@ from html import escape
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="3.0.0",
+    version="4.0.0",
 )
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,7 +32,7 @@ app.add_middleware(
 
 
 # =========================================================
-# HTTP HEADERS
+# HTTP
 # =========================================================
 
 HEADERS = {
@@ -46,9 +45,7 @@ HEADERS = {
         "text/html,application/xhtml+xml,"
         "application/xml;q=0.9,*/*;q=0.8"
     ),
-    "Accept-Language": (
-        "en-US,en;q=0.9"
-    ),
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 
@@ -57,27 +54,23 @@ HEADERS = {
 # =========================================================
 
 EMAIL_REGEX = re.compile(
-    r"[a-zA-Z0-9_.+\-]+"
+    r"[A-Za-z0-9._%+\-]+"
     r"@"
-    r"[a-zA-Z0-9\-]+"
-    r"(?:\.[a-zA-Z0-9\-]+)+"
+    r"[A-Za-z0-9.\-]+"
+    r"\.[A-Za-z]{2,}"
 )
 
-# Broad enough for international websites, but validated
-# afterwards so random 10-digit numbers are less likely
-# to become fake phone numbers.
 PHONE_CANDIDATE_REGEX = re.compile(
     r"""
-    (?<![\d])
+    (?<!\d)
     (?:
         \+\d{1,3}[\s.\-()]*
     )?
     (?:\d[\s.\-()]*){7,15}
-    (?![\d])
+    (?!\d)
     """,
     re.VERBOSE,
 )
-
 
 CTA_KEYWORDS = [
     "book",
@@ -111,6 +104,8 @@ CTA_KEYWORDS = [
     "consultation",
     "consult",
     "talk to us",
+    "get in touch",
+    "send message",
 ]
 
 CONVERSION_LINK_KEYWORDS = [
@@ -128,6 +123,7 @@ CONVERSION_LINK_KEYWORDS = [
     "inquiry",
     "request",
     "schedule",
+    "get in touch",
 ]
 
 COMMERCIAL_KEYWORDS = [
@@ -171,6 +167,21 @@ COMMERCIAL_KEYWORDS = [
     "software",
     "saas",
     "technology",
+    "wholesale",
+    "supplier",
+    "dealer",
+    "distributor",
+    "engineering",
+    "architect",
+    "architecture",
+    "accounting",
+    "insurance",
+    "finance",
+    "logistics",
+    "transport",
+    "automotive",
+    "education",
+    "training",
 ]
 
 BUSINESS_SCHEMA_TYPES = {
@@ -178,7 +189,6 @@ BUSINESS_SCHEMA_TYPES = {
     "Corporation",
     "LocalBusiness",
     "ProfessionalService",
-    "Service",
     "Store",
     "Restaurant",
     "Hotel",
@@ -189,6 +199,369 @@ BUSINESS_SCHEMA_TYPES = {
     "FinancialService",
     "Manufacturer",
     "SportsActivityLocation",
+    "Airline",
+    "EducationalOrganization",
+    "GovernmentOrganization",
+}
+
+GENERIC_NAME_PATTERNS = [
+    "home",
+    "homepage",
+    "welcome",
+    "welcome to",
+    "official website",
+    "official site",
+    "website",
+    "site",
+]
+
+DESCRIPTIVE_TITLE_WORDS = {
+    "manufacturer",
+    "manufacturing",
+    "supplier",
+    "suppliers",
+    "solutions",
+    "services",
+    "service",
+    "products",
+    "product",
+    "company",
+    "business",
+    "agency",
+    "consulting",
+    "consultancy",
+    "construction",
+    "engineering",
+    "technology",
+    "technologies",
+    "software",
+    "marketing",
+    "digital",
+    "law",
+    "legal",
+    "clinic",
+    "dental",
+    "restaurant",
+    "hotel",
+    "real estate",
+    "property",
+    "contractor",
+    "wholesale",
+    "distributor",
+    "dealer",
+    "india",
+    "usa",
+    "uk",
+    "canada",
+    "australia",
+    "singapore",
+    "dubai",
+}
+
+COUNTRY_NAMES = {
+    "india": "IN",
+    "united states": "US",
+    "united states of america": "US",
+    "usa": "US",
+    "america": "US",
+    "united kingdom": "GB",
+    "england": "GB",
+    "scotland": "GB",
+    "wales": "GB",
+    "northern ireland": "GB",
+    "canada": "CA",
+    "australia": "AU",
+    "new zealand": "NZ",
+    "germany": "DE",
+    "france": "FR",
+    "italy": "IT",
+    "spain": "ES",
+    "portugal": "PT",
+    "netherlands": "NL",
+    "belgium": "BE",
+    "switzerland": "CH",
+    "austria": "AT",
+    "ireland": "IE",
+    "japan": "JP",
+    "china": "CN",
+    "singapore": "SG",
+    "malaysia": "MY",
+    "indonesia": "ID",
+    "thailand": "TH",
+    "philippines": "PH",
+    "vietnam": "VN",
+    "south korea": "KR",
+    "korea": "KR",
+    "united arab emirates": "AE",
+    "uae": "AE",
+    "saudi arabia": "SA",
+    "qatar": "QA",
+    "kuwait": "KW",
+    "bahrain": "BH",
+    "oman": "OM",
+    "south africa": "ZA",
+    "nigeria": "NG",
+    "kenya": "KE",
+    "ghana": "GH",
+    "egypt": "EG",
+    "brazil": "BR",
+    "mexico": "MX",
+    "argentina": "AR",
+    "chile": "CL",
+    "colombia": "CO",
+    "peru": "PE",
+}
+
+TLD_COUNTRY_MAP = {
+    "uk": "GB",
+    "de": "DE",
+    "fr": "FR",
+    "it": "IT",
+    "es": "ES",
+    "pt": "PT",
+    "nl": "NL",
+    "be": "BE",
+    "ch": "CH",
+    "at": "AT",
+    "ie": "IE",
+    "in": "IN",
+    "au": "AU",
+    "nz": "NZ",
+    "ca": "CA",
+    "us": "US",
+    "ae": "AE",
+    "sg": "SG",
+    "jp": "JP",
+    "cn": "CN",
+    "br": "BR",
+    "mx": "MX",
+    "za": "ZA",
+    "ng": "NG",
+    "ke": "KE",
+    "gh": "GH",
+    "my": "MY",
+    "id": "ID",
+    "th": "TH",
+    "ph": "PH",
+    "vn": "VN",
+    "kr": "KR",
+    "sa": "SA",
+    "qa": "QA",
+    "kw": "KW",
+    "bh": "BH",
+    "om": "OM",
+    "eg": "EG",
+    "ar": "AR",
+    "cl": "CL",
+    "co": "CO",
+    "pe": "PE",
+}
+
+PHONE_COUNTRY_CODES = {
+    "1": "US",
+    "7": "RU",
+    "20": "EG",
+    "27": "ZA",
+    "30": "GR",
+    "31": "NL",
+    "32": "BE",
+    "33": "FR",
+    "34": "ES",
+    "36": "HU",
+    "39": "IT",
+    "40": "RO",
+    "41": "CH",
+    "43": "AT",
+    "44": "GB",
+    "45": "DK",
+    "46": "SE",
+    "47": "NO",
+    "48": "PL",
+    "49": "DE",
+    "51": "PE",
+    "52": "MX",
+    "53": "CU",
+    "54": "AR",
+    "55": "BR",
+    "56": "CL",
+    "57": "CO",
+    "58": "VE",
+    "60": "MY",
+    "61": "AU",
+    "62": "ID",
+    "63": "PH",
+    "64": "NZ",
+    "65": "SG",
+    "66": "TH",
+    "81": "JP",
+    "82": "KR",
+    "84": "VN",
+    "86": "CN",
+    "90": "TR",
+    "91": "IN",
+    "92": "PK",
+    "93": "AF",
+    "94": "LK",
+    "95": "MM",
+    "98": "IR",
+    "211": "SS",
+    "212": "MA",
+    "213": "DZ",
+    "216": "TN",
+    "218": "LY",
+    "220": "GM",
+    "221": "SN",
+    "222": "MR",
+    "223": "ML",
+    "224": "GN",
+    "225": "CI",
+    "226": "BF",
+    "227": "NE",
+    "228": "TG",
+    "229": "BJ",
+    "230": "MU",
+    "231": "LR",
+    "232": "SL",
+    "233": "GH",
+    "234": "NG",
+    "235": "TD",
+    "236": "CF",
+    "237": "CM",
+    "238": "CV",
+    "239": "ST",
+    "240": "GQ",
+    "241": "GA",
+    "242": "CG",
+    "243": "CD",
+    "244": "AO",
+    "245": "GW",
+    "248": "SC",
+    "249": "SD",
+    "250": "RW",
+    "251": "ET",
+    "252": "SO",
+    "253": "DJ",
+    "254": "KE",
+    "255": "TZ",
+    "256": "UG",
+    "257": "BI",
+    "258": "MZ",
+    "260": "ZM",
+    "261": "MG",
+    "262": "RE",
+    "263": "ZW",
+    "264": "NA",
+    "265": "MW",
+    "266": "LS",
+    "267": "BW",
+    "268": "SZ",
+    "269": "KM",
+    "290": "SH",
+    "291": "ER",
+    "297": "AW",
+    "298": "FO",
+    "299": "GL",
+    "350": "GI",
+    "351": "PT",
+    "352": "LU",
+    "353": "IE",
+    "354": "IS",
+    "355": "AL",
+    "356": "MT",
+    "357": "CY",
+    "358": "FI",
+    "359": "BG",
+    "370": "LT",
+    "371": "LV",
+    "372": "EE",
+    "373": "MD",
+    "374": "AM",
+    "375": "BY",
+    "376": "AD",
+    "377": "MC",
+    "378": "SM",
+    "380": "UA",
+    "381": "RS",
+    "382": "ME",
+    "383": "XK",
+    "385": "HR",
+    "386": "SI",
+    "387": "BA",
+    "389": "MK",
+    "420": "CZ",
+    "421": "SK",
+    "423": "LI",
+    "500": "FK",
+    "501": "BZ",
+    "502": "GT",
+    "503": "SV",
+    "504": "HN",
+    "505": "NI",
+    "506": "CR",
+    "507": "PA",
+    "508": "PM",
+    "509": "HT",
+    "590": "GP",
+    "591": "BO",
+    "592": "GY",
+    "593": "EC",
+    "594": "GF",
+    "595": "PY",
+    "596": "MQ",
+    "597": "SR",
+    "598": "UY",
+    "599": "CW",
+    "670": "TL",
+    "672": "AQ",
+    "673": "BN",
+    "674": "NR",
+    "675": "PG",
+    "676": "TO",
+    "677": "SB",
+    "678": "VU",
+    "679": "FJ",
+    "680": "PW",
+    "681": "WF",
+    "682": "CK",
+    "683": "NU",
+    "685": "WS",
+    "686": "KI",
+    "687": "NC",
+    "688": "TV",
+    "689": "PF",
+    "690": "TK",
+    "691": "FM",
+    "692": "MH",
+    "850": "KP",
+    "852": "HK",
+    "853": "MO",
+    "855": "KH",
+    "856": "LA",
+    "880": "BD",
+    "886": "TW",
+    "960": "MV",
+    "961": "LB",
+    "962": "JO",
+    "963": "SY",
+    "964": "IQ",
+    "965": "KW",
+    "966": "SA",
+    "967": "YE",
+    "968": "OM",
+    "970": "PS",
+    "971": "AE",
+    "972": "IL",
+    "973": "BH",
+    "974": "QA",
+    "975": "BT",
+    "976": "MN",
+    "977": "NP",
+    "992": "TJ",
+    "993": "TM",
+    "994": "AZ",
+    "995": "GE",
+    "996": "KG",
+    "998": "UZ",
 }
 
 
@@ -202,9 +575,7 @@ def normalize_url(raw_url: str) -> str:
     if not value:
         return ""
 
-    if value.startswith(
-        ("http://", "https://")
-    ):
+    if value.startswith(("http://", "https://")):
         return value
 
     return f"https://{value}"
@@ -218,6 +589,8 @@ def get_domain(url: str) -> str:
         return (
             parsed.netloc
             .lower()
+            .split("@")[-1]
+            .split(":")[0]
             .removeprefix("www.")
         )
     except Exception:
@@ -225,24 +598,115 @@ def get_domain(url: str) -> str:
 
 
 # =========================================================
+# GENERIC CLEANING
+# =========================================================
+
+def clean_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value),
+    ).strip()
+
+
+def looks_generic_business_name(value: str) -> bool:
+    text = clean_text(value).lower()
+
+    if not text:
+        return True
+
+    if len(text) < 2 or len(text) > 120:
+        return True
+
+    if text in GENERIC_NAME_PATTERNS:
+        return True
+
+    return False
+
+
+def clean_business_name_candidate(
+    value: str,
+) -> str:
+    value = clean_text(value)
+
+    if not value:
+        return ""
+
+    value = re.sub(
+        r"\s*[|•·]\s*.*$",
+        "",
+        value,
+    ).strip()
+
+    value = re.sub(
+        r"\s+[-–—:]\s+.*$",
+        "",
+        value,
+    ).strip()
+
+    return value
+
+
+def title_candidate_quality(
+    candidate: str,
+) -> float:
+    candidate = clean_text(candidate)
+
+    if not candidate:
+        return 0
+
+    lowered = candidate.lower()
+
+    if looks_generic_business_name(candidate):
+        return 0
+
+    score = 50
+
+    words = lowered.split()
+
+    if 1 <= len(words) <= 6:
+        score += 15
+
+    if len(words) <= 3:
+        score += 10
+
+    if any(
+        word in lowered
+        for word in DESCRIPTIVE_TITLE_WORDS
+    ):
+        score -= 20
+
+    if re.search(
+        r"\b(india|usa|uk|canada|australia|"
+        r"singapore|dubai|uae|germany|france)\b",
+        lowered,
+    ):
+        score -= 15
+
+    if len(candidate) > 70:
+        score -= 20
+
+    return max(0, min(100, score))
+
+
+# =========================================================
 # BUSINESS NAME EXTRACTION
 # =========================================================
 
-def extract_business_name(
+def iter_jsonld_objects(
     soup: BeautifulSoup,
-) -> str:
-    """
-    Attempts to find the actual organization/business name
-    before falling back to the page title.
-    """
-
-    # -----------------------------------------------------
-    # JSON-LD
-    # -----------------------------------------------------
+) -> list[dict]:
+    objects: list[dict] = []
 
     for script in soup.find_all(
         "script",
-        attrs={"type": "application/ld+json"},
+        attrs={"type": re.compile(
+            r"application/ld\+json",
+            re.I,
+        )},
     ):
         raw = script.string or script.get_text()
 
@@ -250,61 +714,107 @@ def extract_business_name(
             continue
 
         try:
-            import json
-
             parsed = json.loads(raw)
-
-            candidates = []
-
-            if isinstance(parsed, dict):
-                candidates.append(parsed)
-
-                graph = parsed.get("@graph")
-
-                if isinstance(graph, list):
-                    candidates.extend(
-                        item
-                        for item in graph
-                        if isinstance(item, dict)
-                    )
-
-            elif isinstance(parsed, list):
-                candidates.extend(
-                    item
-                    for item in parsed
-                    if isinstance(item, dict)
-                )
-
-            for item in candidates:
-
-                schema_type = item.get("@type")
-
-                types = []
-
-                if isinstance(schema_type, str):
-                    types = [schema_type]
-
-                elif isinstance(schema_type, list):
-                    types = schema_type
-
-                if any(
-                    str(item_type)
-                    in BUSINESS_SCHEMA_TYPES
-                    for item_type in types
-                ):
-                    name = item.get("name")
-
-                    if isinstance(name, str):
-                        name = name.strip()
-
-                        if 2 <= len(name) <= 150:
-                            return name
-
         except Exception:
             continue
 
+        if isinstance(parsed, dict):
+            objects.append(parsed)
+
+            graph = parsed.get("@graph")
+
+            if isinstance(graph, list):
+                objects.extend(
+                    item
+                    for item in graph
+                    if isinstance(item, dict)
+                )
+
+        elif isinstance(parsed, list):
+            objects.extend(
+                item
+                for item in parsed
+                if isinstance(item, dict)
+            )
+
+    return objects
+
+
+def extract_business_name(
+    soup: BeautifulSoup,
+) -> tuple[str, str, int]:
+
     # -----------------------------------------------------
-    # OpenGraph site_name
+    # 1. JSON-LD
+    # -----------------------------------------------------
+
+    schema_candidates: list[str] = []
+
+    for item in iter_jsonld_objects(soup):
+        schema_type = item.get("@type")
+
+        if isinstance(schema_type, str):
+            types = [schema_type]
+        elif isinstance(schema_type, list):
+            types = [
+                str(value)
+                for value in schema_type
+            ]
+        else:
+            types = []
+
+        if not any(
+            item_type in BUSINESS_SCHEMA_TYPES
+            for item_type in types
+        ):
+            continue
+
+        for field in [
+            "name",
+            "legalName",
+        ]:
+            value = item.get(field)
+
+            if isinstance(value, str):
+                cleaned = clean_business_name_candidate(
+                    value
+                )
+
+                if (
+                    cleaned
+                    and not looks_generic_business_name(
+                        cleaned
+                    )
+                ):
+                    schema_candidates.append(
+                        cleaned
+                    )
+
+        # Nested brand
+        brand = item.get("brand")
+
+        if isinstance(brand, dict):
+            brand_name = brand.get("name")
+
+            if isinstance(brand_name, str):
+                cleaned = clean_business_name_candidate(
+                    brand_name
+                )
+
+                if cleaned:
+                    schema_candidates.append(
+                        cleaned
+                    )
+
+    if schema_candidates:
+        return (
+            schema_candidates[0],
+            "json_ld",
+            95,
+        )
+
+    # -----------------------------------------------------
+    # 2. OpenGraph site name
     # -----------------------------------------------------
 
     og_site_name = soup.find(
@@ -314,22 +824,74 @@ def extract_business_name(
         },
     )
 
-    if (
-        og_site_name
-        and og_site_name.get("content")
-    ):
-        value = og_site_name["content"].strip()
+    if og_site_name:
+        value = og_site_name.get("content")
 
-        if 2 <= len(value) <= 150:
-            return value
+        if isinstance(value, str):
+            cleaned = clean_business_name_candidate(
+                value
+            )
+
+            if cleaned and not looks_generic_business_name(
+                cleaned
+            ):
+                return (
+                    cleaned,
+                    "og_site_name",
+                    90,
+                )
 
     # -----------------------------------------------------
-    # Application / publisher meta
+    # 3. Logo / brand metadata
+    # -----------------------------------------------------
+
+    logo_selectors = [
+        '[itemprop="name"]',
+        '[itemprop="brand"]',
+        "header .logo",
+        "header .brand",
+        "header [class*='logo']",
+        "header [class*='brand']",
+        "nav .logo",
+        "nav .brand",
+        "[class*='site-logo']",
+        "[class*='brand-name']",
+    ]
+
+    for selector in logo_selectors:
+        element = soup.select_one(selector)
+
+        if not element:
+            continue
+
+        text = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        text = clean_business_name_candidate(
+            text
+        )
+
+        if (
+            text
+            and not looks_generic_business_name(text)
+            and len(text) <= 100
+        ):
+            return (
+                text,
+                "logo_or_brand",
+                82,
+            )
+
+    # -----------------------------------------------------
+    # 4. Meta publisher / application name
     # -----------------------------------------------------
 
     for attr_name in [
         "application-name",
-        "author",
         "publisher",
     ]:
         tag = soup.find(
@@ -337,44 +899,89 @@ def extract_business_name(
             attrs={"name": attr_name},
         )
 
-        if tag and tag.get("content"):
-            value = tag["content"].strip()
+        if not tag:
+            continue
 
-            if 2 <= len(value) <= 150:
-                return value
+        value = tag.get("content")
+
+        if isinstance(value, str):
+            cleaned = clean_business_name_candidate(
+                value
+            )
+
+            if cleaned and not looks_generic_business_name(
+                cleaned
+            ):
+                return (
+                    cleaned,
+                    f"meta_{attr_name}",
+                    75,
+                )
 
     # -----------------------------------------------------
-    # Header / logo text
+    # 5. Footer company name
     # -----------------------------------------------------
 
-    selectors = [
-        "header .logo",
-        "header .brand",
-        "header [class*='logo']",
-        "header [class*='brand']",
-        "nav .logo",
-        "nav .brand",
-    ]
+    for selector in [
+        "footer",
+        "[class*='footer']",
+    ]:
+        footer = soup.select_one(selector)
 
-    for selector in selectors:
-        element = soup.select_one(selector)
+        if not footer:
+            continue
 
-        if element:
-            text = element.get_text(
+        text = clean_text(
+            footer.get_text(
                 " ",
                 strip=True,
             )
+        )
 
-            if 2 <= len(text) <= 100:
-                return text
+        patterns = [
+            r"(?:©|copyright)\s*(?:\d{4}\s*)?([A-Za-z0-9&.,'’\- ]{2,100})",
+            r"(?:owned by|operated by|a division of)\s+([A-Za-z0-9&.,'’\- ]{2,100})",
+        ]
+
+        for pattern in patterns:
+            match = re.search(
+                pattern,
+                text,
+                re.I,
+            )
+
+            if match:
+                candidate = clean_text(
+                    match.group(1)
+                )
+
+                candidate = re.sub(
+                    r"\s*[|•·].*$",
+                    "",
+                    candidate,
+                ).strip()
+
+                if candidate:
+                    return (
+                        candidate,
+                        "footer",
+                        65,
+                    )
 
     # -----------------------------------------------------
-    # Title fallback
+    # 6. Title intelligence
     # -----------------------------------------------------
 
-    if soup.title and soup.title.string:
-        title = soup.title.string.strip()
+    title = ""
 
+    if soup.title:
+        title = clean_text(
+            soup.title.get_text()
+        )
+
+    title_candidates: list[tuple[str, float]] = []
+
+    if title:
         separators = [
             " | ",
             " - ",
@@ -385,95 +992,127 @@ def extract_business_name(
 
         for separator in separators:
             parts = [
-                p.strip()
-                for p in title.split(
-                    separator
-                )
-                if p.strip()
+                clean_text(part)
+                for part in title.split(separator)
+                if clean_text(part)
             ]
 
             if len(parts) >= 2:
-                # The shorter side is often the company
-                # but we avoid making overly aggressive guesses.
-                candidates = sorted(
-                    parts,
-                    key=len,
-                )
+                for part in parts:
+                    quality = title_candidate_quality(
+                        part
+                    )
 
-                candidate = candidates[0]
+                    if quality > 0:
+                        title_candidates.append(
+                            (part, quality)
+                        )
 
-                if (
-                    2 <= len(candidate) <= 100
-                    and len(candidate.split()) <= 12
-                ):
-                    return candidate
+    if title_candidates:
+        title_candidates.sort(
+            key=lambda item: item[1],
+            reverse=True,
+        )
 
-        if 2 <= len(title) <= 150:
-            return title
+        candidate, quality = title_candidates[0]
 
-    return ""
+        # Do not use a purely descriptive title
+        if quality >= 45:
+            return (
+                candidate,
+                "title_inference",
+                int(min(60, quality)),
+            )
+
+    # -----------------------------------------------------
+    # 7. Final domain fallback
+    # -----------------------------------------------------
+
+    return (
+        "",
+        "unknown",
+        0,
+    )
 
 
 # =========================================================
-# LOCALIZATION / COUNTRY HINTS
+# COUNTRY / LOCALIZATION
 # =========================================================
+
+def get_phone_country(
+    phone: str,
+) -> Optional[str]:
+    digits = re.sub(r"\D", "", phone)
+
+    if not digits:
+        return None
+
+    for length in [3, 2, 1]:
+        prefix = digits[:length]
+
+        if prefix in PHONE_COUNTRY_CODES:
+            return PHONE_COUNTRY_CODES[prefix]
+
+    return None
+
+
+def extract_country_names(
+    text: str,
+) -> list[str]:
+    lowered = clean_text(text).lower()
+    found: list[str] = []
+
+    for name, code in COUNTRY_NAMES.items():
+        if re.search(
+            rf"\b{re.escape(name)}\b",
+            lowered,
+        ):
+            found.append(code)
+
+    return list(dict.fromkeys(found))
+
 
 def detect_locale_signals(
     soup: BeautifulSoup,
     url: str,
+    phones: Optional[list[str]] = None,
 ) -> dict:
-    """
-    Returns hints only. These are NOT used to assume
-    the business is from one particular country.
-    """
-
-    language = None
-    country_hint = None
-    currency_hints = []
 
     html_tag = soup.find("html")
 
+    language = None
+
     if html_tag:
-        lang = html_tag.get("lang")
+        raw_lang = html_tag.get("lang")
 
-        if lang:
-            language = lang.strip().lower()
+        if raw_lang:
+            language = clean_text(
+                raw_lang
+            ).lower()
 
-            if "-" in language:
-                country_hint = (
-                    language.split("-", 1)[1].upper()
-                )
+    # -----------------------------------------------------
+    # Important:
+    # `en-us` is LANGUAGE metadata, not proof that
+    # the company itself is in the US.
+    # -----------------------------------------------------
 
-    # hreflang
-    for link in soup.find_all(
-        "link",
-        href=True,
-    ):
-        if link.get("rel") == ["alternate"] or (
-            "alternate" in link.get(
-                "rel",
-                [],
+    language_country = None
+
+    if language and "-" in language:
+        possible = language.rsplit(
+            "-",
+            1,
+        )[1].upper()
+
+        if (
+            len(possible) == 2
+            and possible in set(
+                TLD_COUNTRY_MAP.values()
             )
         ):
-            hreflang = link.get("hreflang")
+            language_country = possible
 
-            if hreflang:
-                if "-" in hreflang:
-                    possible_country = (
-                        hreflang.split(
-                            "-",
-                            1,
-                        )[1]
-                        .upper()
-                    )
-
-                    if (
-                        not country_hint
-                        and 2
-                        <= len(possible_country)
-                        <= 3
-                    ):
-                        country_hint = possible_country
+    currency_hints: list[str] = []
 
     text = soup.get_text(
         " ",
@@ -481,18 +1120,67 @@ def detect_locale_signals(
     )
 
     currency_patterns = {
-        "USD": ["$", "USD", "US$"],
-        "EUR": ["€", "EUR"],
-        "GBP": ["£", "GBP"],
-        "INR": ["₹", "INR", "Rs."],
-        "CAD": ["C$", "CAD"],
-        "AUD": ["A$", "AUD"],
-        "JPY": ["¥", "JPY"],
-        "CNY": ["¥", "CNY", "RMB"],
-        "AED": ["AED"],
-        "SAR": ["SAR"],
-        "SGD": ["S$", "SGD"],
-        "NZD": ["NZ$", "NZD"],
+        "USD": [
+            "$",
+            "USD",
+            "US$",
+        ],
+        "EUR": [
+            "€",
+            "EUR",
+        ],
+        "GBP": [
+            "£",
+            "GBP",
+        ],
+        "INR": [
+            "₹",
+            "INR",
+            "Rs.",
+            "Rs ",
+        ],
+        "CAD": [
+            "C$",
+            "CAD",
+        ],
+        "AUD": [
+            "A$",
+            "AUD",
+        ],
+        "JPY": [
+            "¥",
+            "JPY",
+        ],
+        "CNY": [
+            "CNY",
+            "RMB",
+        ],
+        "AED": [
+            "AED",
+        ],
+        "SAR": [
+            "SAR",
+        ],
+        "SGD": [
+            "S$",
+            "SGD",
+        ],
+        "NZD": [
+            "NZ$",
+            "NZD",
+        ],
+        "MYR": [
+            "MYR",
+            "RM ",
+        ],
+        "BRL": [
+            "R$",
+            "BRL",
+        ],
+        "ZAR": [
+            "ZAR",
+            "R ",
+        ],
     }
 
     for currency, patterns in currency_patterns.items():
@@ -500,7 +1188,13 @@ def detect_locale_signals(
             pattern in text
             for pattern in patterns
         ):
-            currency_hints.append(currency)
+            currency_hints.append(
+                currency
+            )
+
+    # -----------------------------------------------------
+    # TLD
+    # -----------------------------------------------------
 
     tld = ""
 
@@ -512,60 +1206,209 @@ def detect_locale_signals(
                 ".",
                 1,
             )[1].lower()
-
     except Exception:
         pass
 
-    tld_country_map = {
-        "uk": "GB",
-        "de": "DE",
-        "fr": "FR",
-        "it": "IT",
-        "es": "ES",
-        "in": "IN",
-        "au": "AU",
-        "nz": "NZ",
-        "ca": "CA",
-        "us": "US",
-        "ae": "AE",
-        "sg": "SG",
-        "jp": "JP",
-        "cn": "CN",
-        "br": "BR",
-        "mx": "MX",
-        "za": "ZA",
+    tld_country = TLD_COUNTRY_MAP.get(
+        tld
+    )
+
+    # -----------------------------------------------------
+    # Explicit country mentions
+    # -----------------------------------------------------
+
+    explicit_countries = extract_country_names(
+        text[:30000]
+    )
+
+    explicit_country = (
+        explicit_countries[0]
+        if explicit_countries
+        else None
+    )
+
+    # -----------------------------------------------------
+    # Phone country
+    # -----------------------------------------------------
+
+    phone_country = None
+
+    if phones:
+        phone_votes: dict[str, int] = {}
+
+        for phone in phones:
+            country = get_phone_country(
+                phone
+            )
+
+            if country:
+                phone_votes[country] = (
+                    phone_votes.get(country, 0) + 1
+                )
+
+        if phone_votes:
+            phone_country = max(
+                phone_votes,
+                key=phone_votes.get,
+            )
+
+    # -----------------------------------------------------
+    # Evidence scoring
+    #
+    # Phone > explicit address/country > currency
+    # > TLD > hreflang > language
+    # -----------------------------------------------------
+
+    evidence: dict[str, int] = {}
+
+    def add_evidence(
+        country: Optional[str],
+        weight: int,
+    ) -> None:
+        if not country:
+            return
+
+        evidence[country] = (
+            evidence.get(country, 0)
+            + weight
+        )
+
+    add_evidence(phone_country, 100)
+    add_evidence(explicit_country, 80)
+
+    # Currency-to-country hints
+    currency_country_map = {
+        "USD": "US",
+        "EUR": "EU",
+        "GBP": "GB",
+        "INR": "IN",
+        "CAD": "CA",
+        "AUD": "AU",
+        "JPY": "JP",
+        "CNY": "CN",
+        "AED": "AE",
+        "SAR": "SA",
+        "SGD": "SG",
+        "NZD": "NZ",
+        "MYR": "MY",
+        "BRL": "BR",
+        "ZAR": "ZA",
     }
 
-    if not country_hint:
-        country_hint = tld_country_map.get(tld)
+    for currency in currency_hints:
+        add_evidence(
+            currency_country_map.get(
+                currency
+            ),
+            35,
+        )
+
+    add_evidence(tld_country, 25)
+
+    # hreflang
+    hreflang_countries: list[str] = []
+
+    for link in soup.find_all(
+        "link",
+        href=True,
+    ):
+        hreflang = link.get(
+            "hreflang"
+        )
+
+        if not hreflang:
+            continue
+
+        hreflang = str(
+            hreflang
+        ).lower()
+
+        if "-" in hreflang:
+            country = hreflang.rsplit(
+                "-",
+                1,
+            )[1].upper()
+
+            if len(country) == 2:
+                hreflang_countries.append(
+                    country
+                )
+
+    if hreflang_countries:
+        for country in set(
+            hreflang_countries
+        ):
+            add_evidence(
+                country,
+                18,
+            )
+
+    add_evidence(
+        language_country,
+        5,
+    )
+
+    country_hint = None
+    country_confidence = "Unknown"
+
+    if evidence:
+        country_hint = max(
+            evidence,
+            key=evidence.get,
+        )
+
+        winning_score = evidence[
+            country_hint
+        ]
+
+        if winning_score >= 100:
+            country_confidence = "High"
+        elif winning_score >= 70:
+            country_confidence = "High"
+        elif winning_score >= 35:
+            country_confidence = "Medium"
+        else:
+            country_confidence = "Low"
+
+        # EU is a currency-region hint,
+        # not an actual country.
+        if country_hint == "EU":
+            country_hint = None
+            country_confidence = "Unknown"
 
     return {
         "language": language,
         "country_hint": country_hint,
-        "currency_hints": currency_hints[:5],
+        "country_confidence": country_confidence,
+        "country_evidence": {
+            "phone_country": phone_country,
+            "explicit_country": explicit_country,
+            "tld_country": tld_country,
+            "language_country": language_country,
+        },
+        "currency_hints": currency_hints[:8],
     }
 
 
 # =========================================================
-# TECH STACK
+# TECHNOLOGY
 # =========================================================
 
 def detect_tech_stack(
     html_lower: str,
 ) -> dict:
+
     return {
         "wordpress": (
             "wp-content" in html_lower
             or "wp-includes" in html_lower
             or "wordpress" in html_lower
         ),
-
         "shopify": (
             "cdn.shopify.com" in html_lower
             or "myshopify.com" in html_lower
             or "shopify.theme" in html_lower
         ),
-
         "nextjs": (
             "__next_data__" in html_lower
             or "/_next/static/" in html_lower
@@ -575,7 +1418,7 @@ def detect_tech_stack(
 
 
 # =========================================================
-# TRACKER DETECTION
+# TRACKERS
 # =========================================================
 
 def detect_trackers(
@@ -584,52 +1427,36 @@ def detect_trackers(
 
     return {
         "google_analytics": (
-            "google-analytics.com"
-            in html_lower
-            or "googletagmanager.com/gtag"
-            in html_lower
-            or "gtag("
-            in html_lower
-            or "gtag.js"
-            in html_lower
+            "google-analytics.com" in html_lower
+            or "googletagmanager.com/gtag" in html_lower
+            or "gtag(" in html_lower
+            or "gtag.js" in html_lower
+            or "google-analytics" in html_lower
         ),
-
         "facebook_pixel": (
-            "connect.facebook.net"
-            in html_lower
-            or "fbevents.js"
-            in html_lower
-            or "fbq("
-            in html_lower
+            "connect.facebook.net" in html_lower
+            or "fbevents.js" in html_lower
+            or "fbq(" in html_lower
         ),
-
         "google_tag_manager": (
-            "googletagmanager.com"
-            in html_lower
+            "googletagmanager.com" in html_lower
+            or "gtm-" in html_lower
         ),
-
         "linkedin_insight": (
-            "snap.licdn.com"
-            in html_lower
-            or "lintrk"
-            in html_lower
-            or "linkedininsighttag"
-            in html_lower
+            "snap.licdn.com" in html_lower
+            or "lintrk" in html_lower
+            or "linkedininsighttag" in html_lower
         ),
-
         "hubspot": (
-            "js.hs-scripts.com"
-            in html_lower
-            or "_hsq"
-            in html_lower
-            or "hubspotutk"
-            in html_lower
+            "js.hs-scripts.com" in html_lower
+            or "_hsq" in html_lower
+            or "hubspotutk" in html_lower
         ),
     }
 
 
 # =========================================================
-# PHONE VALIDATION
+# PHONE NORMALIZATION
 # =========================================================
 
 def normalize_phone_candidate(
@@ -639,12 +1466,10 @@ def normalize_phone_candidate(
     if not candidate:
         return None
 
-    value = candidate.strip()
-
-    # Remove HTML artifacts / excessive punctuation
-    value = value.replace(
-        "\u00a0",
-        " ",
+    value = (
+        candidate
+        .replace("\xa0", " ")
+        .strip()
     )
 
     digits = re.sub(
@@ -653,41 +1478,46 @@ def normalize_phone_candidate(
         value,
     )
 
-    # Reasonable global phone length
     if not (8 <= len(digits) <= 15):
         return None
 
-    # Reject values consisting almost entirely of one digit
+    # Obvious junk
     if len(set(digits)) == 1:
         return None
 
-    # Reject obvious date-like / ID-like fragments
-    if (
-        len(digits) == 10
-        and digits.startswith("000")
+    if digits.startswith(
+        (
+            "000000",
+            "111111",
+            "123456",
+            "999999",
+        )
     ):
         return None
 
-    # Require either an explicit international prefix
-    # or a reasonably formatted phone candidate.
-    has_plus = value.startswith("+")
+    # Reject numbers that are clearly dates
+    if len(digits) == 8 and re.match(
+        r"^(19|20)\d{6}$",
+        digits,
+    ):
+        return None
 
-    separator_count = len(
+    has_plus = value.startswith("+")
+    separators = len(
         re.findall(
             r"[\s().\-]",
             value,
         )
     )
 
-    # A raw contiguous number without a country code is
-    # more likely to be junk in scraped HTML.
+    # A bare 10-digit number can be legitimate,
+    # but only accept it when the surrounding text
+    # strongly looks like a phone.
     if (
         not has_plus
-        and separator_count == 0
+        and separators == 0
         and len(digits) == 10
     ):
-        # Still allow it if it looks like a normal phone
-        # rather than an obvious technical identifier.
         if digits.startswith(
             (
                 "000",
@@ -698,29 +1528,32 @@ def normalize_phone_candidate(
         ):
             return None
 
-    return "+" + digits if has_plus else digits
+    if has_plus:
+        return f"+{digits}"
+
+    return digits
 
 
 def extract_phone_numbers(
-    html_content: str,
     soup: BeautifulSoup,
-) -> list:
+) -> list[str]:
 
-    phones = []
-    seen_digits = set()
+    phones: list[str] = []
+    seen_digits: set[str] = set()
 
     # -----------------------------------------------------
-    # tel: links are highest-confidence
+    # 1. tel: links
     # -----------------------------------------------------
 
     for anchor in soup.find_all(
         "a",
         href=True,
     ):
-        href = anchor.get("href", "")
+        href = clean_text(
+            anchor.get("href", "")
+        )
 
         if href.lower().startswith("tel:"):
-
             raw = urllib.parse.unquote(
                 href[4:]
             ).strip()
@@ -737,11 +1570,15 @@ def extract_phone_numbers(
                 )
 
                 if digits not in seen_digits:
-                    phones.append(normalized)
-                    seen_digits.add(digits)
+                    phones.append(
+                        normalized
+                    )
+                    seen_digits.add(
+                        digits
+                    )
 
     # -----------------------------------------------------
-    # Visible page text
+    # 2. Visible text
     # -----------------------------------------------------
 
     visible_text = soup.get_text(
@@ -752,7 +1589,6 @@ def extract_phone_numbers(
     for candidate in PHONE_CANDIDATE_REGEX.findall(
         visible_text
     ):
-
         normalized = normalize_phone_candidate(
             candidate
         )
@@ -767,10 +1603,14 @@ def extract_phone_numbers(
         )
 
         if digits not in seen_digits:
-            phones.append(normalized)
-            seen_digits.add(digits)
+            phones.append(
+                normalized
+            )
+            seen_digits.add(
+                digits
+            )
 
-    return phones[:5]
+    return phones[:8]
 
 
 # =========================================================
@@ -778,13 +1618,11 @@ def extract_phone_numbers(
 # =========================================================
 
 def extract_contacts(
-    html_content: str,
     soup: BeautifulSoup,
-) -> tuple[list, dict]:
+) -> tuple[list[str], dict]:
 
     phones = extract_phone_numbers(
-        html_content,
-        soup,
+        soup
     )
 
     socials = {
@@ -798,8 +1636,7 @@ def extract_contacts(
         "a",
         href=True,
     ):
-
-        original_href = (
+        original_href = clean_text(
             anchor.get("href", "")
         )
 
@@ -843,6 +1680,57 @@ def extract_contacts(
 
 
 # =========================================================
+# EMAILS
+# =========================================================
+
+def extract_emails(
+    html_content: str,
+) -> list[str]:
+
+    candidates = EMAIL_REGEX.findall(
+        html_content
+    )
+
+    emails: list[str] = []
+    seen: set[str] = set()
+
+    for email in candidates:
+        clean = email.strip().lower()
+
+        if clean in seen:
+            continue
+
+        if clean.endswith(
+            (
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp",
+                ".gif",
+                ".svg",
+                ".css",
+                ".js",
+            )
+        ):
+            continue
+
+        if clean.startswith(
+            (
+                "example@",
+                "test@",
+                "user@",
+                "name@",
+            )
+        ):
+            continue
+
+        emails.append(clean)
+        seen.add(clean)
+
+    return emails[:8]
+
+
+# =========================================================
 # CONVERSION SIGNALS
 # =========================================================
 
@@ -851,53 +1739,46 @@ def extract_conversion_signals(
     html_lower: str,
 ) -> dict:
 
-    # Forms
     form_count = len(
         soup.find_all("form")
     )
 
     has_form = form_count > 0
 
-    # WhatsApp
     has_whatsapp = (
         "wa.me/" in html_lower
         or "api.whatsapp.com" in html_lower
         or "whatsapp.com/" in html_lower
     )
 
-    # Phone links
     has_tel_link = any(
-        a.get("href", "").lower().startswith(
-            "tel:"
-        )
-        for a in soup.find_all(
+        str(
+            anchor.get("href", "")
+        ).lower().startswith("tel:")
+        for anchor in soup.find_all(
             "a",
             href=True,
         )
     )
 
-    # Email links
     has_mailto = any(
-        a.get("href", "").lower().startswith(
-            "mailto:"
-        )
-        for a in soup.find_all(
+        str(
+            anchor.get("href", "")
+        ).lower().startswith("mailto:")
+        for anchor in soup.find_all(
             "a",
             href=True,
         )
     )
 
-    # Booking / appointment
     has_booking = False
-
-    # CTA
     has_cta = False
-    cta_examples = []
+
+    cta_examples: list[str] = []
 
     for tag in soup.find_all(
         ["a", "button", "input"],
     ):
-
         text = (
             tag.get_text(
                 " ",
@@ -906,6 +1787,10 @@ def extract_conversion_signals(
             or tag.get("value", "")
             or tag.get("aria-label", "")
             or tag.get("title", "")
+        )
+
+        text = clean_text(
+            text
         ).lower()
 
         if not text:
@@ -920,9 +1805,9 @@ def extract_conversion_signals(
         if matched:
             has_cta = True
 
-            if len(cta_examples) < 5:
+            if len(cta_examples) < 6:
                 cta_examples.append(
-                    text[:80]
+                    text[:100]
                 )
 
         if any(
@@ -933,29 +1818,32 @@ def extract_conversion_signals(
                 "schedule",
                 "booking",
                 "reserve",
+                "calendar",
+                "calendly",
             ]
         ):
             has_booking = True
 
-    # Conversion links
     has_conversion_link = False
 
     for anchor in soup.find_all(
         "a",
         href=True,
     ):
-
-        anchor_text = anchor.get_text(
-            " ",
-            strip=True,
+        anchor_text = clean_text(
+            anchor.get_text(
+                " ",
+                strip=True,
+            )
         ).lower()
 
-        href = anchor.get(
-            "href",
-            "",
+        href = clean_text(
+            anchor.get("href", "")
         ).lower()
 
-        combined = f"{anchor_text} {href}"
+        combined = (
+            f"{anchor_text} {href}"
+        )
 
         if any(
             keyword in combined
@@ -983,25 +1871,25 @@ def extract_conversion_signals(
 
 def extract_technical_signals(
     soup: BeautifulSoup,
-    html_content: str,
+    final_url: str,
 ) -> dict:
 
     viewport = soup.find(
         "meta",
-        attrs={"name": re.compile(
-            r"^viewport$",
-            re.I,
-        )},
+        attrs={
+            "name": re.compile(
+                r"^viewport$",
+                re.I,
+            )
+        },
     )
 
     canonical = soup.find(
         "link",
         rel=lambda value: (
             value
-            and (
-                "canonical"
-                in str(value).lower()
-            )
+            and "canonical"
+            in str(value).lower()
         ),
     )
 
@@ -1009,41 +1897,49 @@ def extract_technical_signals(
         "link",
         rel=lambda value: (
             value
-            and (
-                "icon"
-                in str(value).lower()
-            )
+            and "icon"
+            in str(value).lower()
         ),
     )
 
     robots = soup.find(
         "meta",
-        attrs={"name": re.compile(
-            r"^robots$",
-            re.I,
-        )},
+        attrs={
+            "name": re.compile(
+                r"^robots$",
+                re.I,
+            )
+        },
     )
 
-    lang = soup.find("html")
+    html_tag = soup.find("html")
 
-    has_ssl = False
+    html_language = None
+
+    if html_tag:
+        raw_lang = html_tag.get("lang")
+
+        if raw_lang:
+            html_language = clean_text(
+                raw_lang
+            ).lower()
+
+    has_ssl = final_url.lower().startswith(
+        "https://"
+    )
 
     return {
         "has_viewport": bool(viewport),
         "has_favicon": bool(favicon),
         "has_canonical": bool(canonical),
         "has_robots_meta": bool(robots),
-        "html_language": (
-            lang.get("lang")
-            if lang
-            else None
-        ),
+        "html_language": html_language,
         "has_ssl": has_ssl,
     }
 
 
 # =========================================================
-# CONTENT / COMMERCIAL SIGNALS
+# BUSINESS / COMMERCIAL SIGNALS
 # =========================================================
 
 def extract_business_signals(
@@ -1052,18 +1948,20 @@ def extract_business_signals(
     title: str,
 ) -> dict:
 
-    visible_text = soup.get_text(
-        " ",
-        strip=True,
+    visible_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
     ).lower()
 
     combined = (
         f"{business_name} "
         f"{title} "
-        f"{visible_text[:20000]}"
+        f"{visible_text[:30000]}"
     ).lower()
 
-    commercial_matches = []
+    commercial_matches: list[str] = []
 
     for keyword in COMMERCIAL_KEYWORDS:
         if keyword in combined:
@@ -1071,16 +1969,17 @@ def extract_business_signals(
                 keyword
             )
 
-    # Product / service architecture
-    internal_links = []
+    internal_links: list[str] = []
 
     for anchor in soup.find_all(
         "a",
         href=True,
     ):
-        text = anchor.get_text(
-            " ",
-            strip=True,
+        text = clean_text(
+            anchor.get_text(
+                " ",
+                strip=True,
+            )
         )
 
         if text:
@@ -1090,7 +1989,7 @@ def extract_business_signals(
 
     pages_with_commercial_intent = 0
 
-    for link_text in internal_links[:200]:
+    for link_text in internal_links[:300]:
         if any(
             keyword in link_text
             for keyword in [
@@ -1104,6 +2003,9 @@ def extract_business_signals(
                 "case study",
                 "appointment",
                 "book",
+                "about",
+                "industries",
+                "projects",
             ]
         ):
             pages_with_commercial_intent += 1
@@ -1116,57 +2018,75 @@ def extract_business_signals(
             dict.fromkeys(
                 commercial_matches
             )
-        )[:15],
-        "commercial_navigation_signals":
-            pages_with_commercial_intent,
+        )[:20],
+        "commercial_navigation_signals": (
+            pages_with_commercial_intent
+        ),
     }
 
 
 # =========================================================
-# SALES INTELLIGENCE ENGINE
+# SALES INTELLIGENCE
 # =========================================================
 
 def generate_sales_intel(
     data: dict,
 ) -> dict:
 
-    problems = []
-    opportunity_reasons = []
-    recommendations = []
+    problems: list[str] = []
+    opportunity_reasons: list[str] = []
+    recommendations: list[str] = []
+
+    title = clean_text(
+        data.get("title", "")
+    )
+
+    meta_description = clean_text(
+        data.get(
+            "meta_description",
+            "",
+        )
+    )
+
+    h1_count = int(
+        data.get(
+            "h1_count",
+            0,
+        )
+    )
+
+    conversion = data.get(
+        "conversion_signals",
+        {},
+    )
+
+    technical = data.get(
+        "technical_signals",
+        {},
+    )
+
+    trackers = data.get(
+        "trackers",
+        {},
+    )
 
     # =====================================================
     # WEBSITE HEALTH
     # =====================================================
 
-    # -----------------------------------------------------
-    # SEO = 35
-    # -----------------------------------------------------
+    # -----------------------------
+    # SEO 35
+    # -----------------------------
 
     seo_score = 35
-
-    title = (
-        data.get("title")
-        or ""
-    ).strip()
-
-    meta_description = (
-        data.get("meta_description")
-        or ""
-    ).strip()
-
-    h1_count = data.get(
-        "h1_count",
-        0,
-    )
 
     if not title:
         seo_score -= 15
         problems.append(
             "Missing page title"
         )
-
     elif len(title) < 10:
-        seo_score -= 10
+        seo_score -= 8
         problems.append(
             "Weak page title"
         )
@@ -1176,7 +2096,6 @@ def generate_sales_intel(
         problems.append(
             "Missing meta description"
         )
-
     elif len(meta_description) < 50:
         seo_score -= 5
         problems.append(
@@ -1188,23 +2107,22 @@ def generate_sales_intel(
         problems.append(
             "No H1 heading detected"
         )
-
     elif h1_count > 1:
         seo_score -= 5
         problems.append(
             "Multiple H1 headings"
         )
 
-    # -----------------------------------------------------
-    # CONVERSION = 40
-    # -----------------------------------------------------
+    seo_score = max(
+        0,
+        seo_score,
+    )
+
+    # -----------------------------
+    # CONVERSION 40
+    # -----------------------------
 
     conversion_score = 40
-
-    conversion = data.get(
-        "conversion_signals",
-        {},
-    )
 
     has_contact_path = (
         bool(data.get("phones"))
@@ -1219,12 +2137,17 @@ def generate_sales_intel(
                 "has_mailto"
             )
         )
+        or bool(
+            conversion.get(
+                "has_whatsapp"
+            )
+        )
     )
 
     if not conversion.get(
         "has_cta"
     ):
-        conversion_score -= 15
+        conversion_score -= 12
         problems.append(
             "No clear conversion CTA"
         )
@@ -1256,26 +2179,21 @@ def generate_sales_intel(
             "No clear enquiry or booking path"
         )
 
-    # -----------------------------------------------------
-    # TECHNICAL / MARKETING = 25
-    # -----------------------------------------------------
+    conversion_score = max(
+        0,
+        conversion_score,
+    )
+
+    # -----------------------------
+    # TECHNICAL / MARKETING 25
+    # -----------------------------
 
     technical_score = 25
-
-    technical = data.get(
-        "technical_signals",
-        {},
-    )
-
-    trackers = data.get(
-        "trackers",
-        {},
-    )
 
     if not technical.get(
         "has_viewport"
     ):
-        technical_score -= 12
+        technical_score -= 8
         problems.append(
             "Missing mobile viewport"
         )
@@ -1291,20 +2209,34 @@ def generate_sales_intel(
     if not technical.get(
         "has_favicon"
     ):
-        technical_score -= 3
+        technical_score -= 2
         problems.append(
             "Favicon not detected"
         )
 
-    has_any_marketing_tracking = any(
-        trackers.values()
+    if not technical.get(
+        "has_ssl"
+    ):
+        technical_score -= 3
+        problems.append(
+            "HTTPS not detected"
+        )
+
+    has_any_tracking = any(
+        bool(value)
+        for value in trackers.values()
     )
 
-    if not has_any_marketing_tracking:
-        technical_score -= 5
+    if not has_any_tracking:
+        technical_score -= 7
         problems.append(
             "No marketing or analytics tracking detected"
         )
+
+    technical_score = max(
+        0,
+        technical_score,
+    )
 
     website_score = max(
         0,
@@ -1319,26 +2251,25 @@ def generate_sales_intel(
     # =====================================================
     # SALES OPPORTUNITY
     #
-    # This is NOT simply the inverse of website health.
-    # It combines website improvement potential with
-    # commercial intent.
+    # This is deliberately independent from
+    # Website Health.
     # =====================================================
 
     opportunity_score = 0
 
-    # -----------------------------------------------------
-    # WEBSITE IMPROVEMENT POTENTIAL
-    # -----------------------------------------------------
+    # -----------------------------
+    # Conversion opportunity
+    # -----------------------------
 
     if not conversion.get(
         "has_cta"
     ):
-        opportunity_score += 16
+        opportunity_score += 12
         opportunity_reasons.append(
             "No clear conversion CTA"
         )
         recommendations.append(
-            "Add a strong primary CTA"
+            "Add a strong primary CTA for the main customer action"
         )
 
     if not conversion.get(
@@ -1353,56 +2284,69 @@ def generate_sales_intel(
         )
 
     if not has_contact_path:
-        opportunity_score += 8
+        opportunity_score += 9
         opportunity_reasons.append(
             "Weak contact accessibility"
         )
         recommendations.append(
-            "Make contact options more prominent"
+            "Make phone, email, WhatsApp or enquiry options more prominent"
         )
 
-    if not conversion.get(
-        "has_conversion_link"
-    ) and not conversion.get(
-        "has_booking"
+    if (
+        not conversion.get(
+            "has_conversion_link"
+        )
+        and not conversion.get(
+            "has_booking"
+        )
     ):
-        opportunity_score += 8
+        opportunity_score += 7
         opportunity_reasons.append(
             "No clear enquiry or booking path"
         )
-
-    if not technical.get(
-        "has_viewport"
-    ):
-        opportunity_score += 8
-        opportunity_reasons.append(
-            "Mobile optimization concern"
+        recommendations.append(
+            "Create a dedicated enquiry, booking or quote path"
         )
+
+    # -----------------------------
+    # SEO opportunity
+    # -----------------------------
 
     if not meta_description:
         opportunity_score += 5
         opportunity_reasons.append(
             "Missing meta description"
         )
-
+        recommendations.append(
+            "Rewrite the meta title and meta description for search and conversion"
+        )
     elif len(meta_description) < 50:
         opportunity_score += 3
         opportunity_reasons.append(
             "Weak meta description"
         )
+        recommendations.append(
+            "Improve the meta description to better communicate the offer"
+        )
 
     if h1_count == 0:
-        opportunity_score += 6
+        opportunity_score += 5
         opportunity_reasons.append(
             "Missing H1 structure"
+        )
+        recommendations.append(
+            "Create a clear primary H1 focused on the main service or offer"
         )
 
     if not technical.get(
         "has_canonical"
     ):
-        opportunity_score += 3
+        opportunity_score += 2
         opportunity_reasons.append(
             "Canonical URL not detected"
+        )
+        recommendations.append(
+            "Add canonical URL and strengthen technical SEO"
         )
 
     if not data.get(
@@ -1412,88 +2356,115 @@ def generate_sales_intel(
         opportunity_reasons.append(
             "No social sharing image detected"
         )
+        recommendations.append(
+            "Add a professional Open Graph/social sharing image"
+        )
 
-    # -----------------------------------------------------
-    # MARKETING MATURITY
-    # -----------------------------------------------------
+    # -----------------------------
+    # Marketing maturity
+    # -----------------------------
 
     if not trackers.get(
         "google_analytics"
     ):
-        opportunity_score += 3
-
+        opportunity_score += 2
         opportunity_reasons.append(
             "Google Analytics not detected"
+        )
+        recommendations.append(
+            "Add analytics tracking to measure lead and visitor behaviour"
         )
 
     if not trackers.get(
         "facebook_pixel"
     ):
         opportunity_score += 2
-
         opportunity_reasons.append(
             "Meta/Facebook Pixel not detected"
         )
+        recommendations.append(
+            "Add Meta tracking if paid social acquisition is relevant"
+        )
 
-    # -----------------------------------------------------
-    # COMMERCIAL INTENT
-    # -----------------------------------------------------
+    # -----------------------------
+    # Commercial intent
+    # -----------------------------
 
     business_signals = data.get(
         "business_signals",
         {},
     )
 
-    commercial_keyword_count = (
+    commercial_keyword_count = int(
         business_signals.get(
             "commercial_keyword_count",
             0,
         )
     )
 
-    navigation_signals = (
+    navigation_signals = int(
         business_signals.get(
             "commercial_navigation_signals",
             0,
         )
     )
 
-    # These are positive sales-value signals,
-    # not "website is bad" signals.
-    if commercial_keyword_count >= 8:
-        opportunity_score += 8
-
-    elif commercial_keyword_count >= 4:
+    if commercial_keyword_count >= 10:
+        opportunity_score += 9
+        opportunity_reasons.append(
+            "Strong commercial intent detected"
+        )
+    elif commercial_keyword_count >= 6:
+        opportunity_score += 7
+        opportunity_reasons.append(
+            "Clear commercial intent detected"
+        )
+    elif commercial_keyword_count >= 3:
         opportunity_score += 5
+        opportunity_reasons.append(
+            "Commercial website intent detected"
+        )
 
-    elif commercial_keyword_count >= 2:
-        opportunity_score += 3
+    if navigation_signals >= 5:
+        opportunity_score += 6
+    elif navigation_signals >= 3:
+        opportunity_score += 4
+    elif navigation_signals >= 1:
+        opportunity_score += 2
 
-    if navigation_signals >= 4:
-        opportunity_score += 5
-
-    elif navigation_signals >= 2:
-        opportunity_score += 3
-
-    # -----------------------------------------------------
-    # HEALTH CONTRIBUTION
-    # -----------------------------------------------------
+    # -----------------------------
+    # Health contribution
+    # -----------------------------
 
     if website_score < 50:
         opportunity_score += 12
-
     elif website_score < 65:
-        opportunity_score += 9
-
-    elif website_score < 80:
-        opportunity_score += 5
-
-    elif website_score < 90:
+        opportunity_score += 10
+    elif website_score < 75:
+        opportunity_score += 7
+    elif website_score < 85:
+        opportunity_score += 4
+    elif website_score < 92:
         opportunity_score += 2
 
-    # -----------------------------------------------------
+    # -----------------------------
+    # Strong business contact evidence
+    # -----------------------------
+
+    if data.get("emails"):
+        opportunity_score += 2
+
+    if data.get("phones"):
+        opportunity_score += 2
+
+    if (
+        conversion.get("has_whatsapp")
+    ):
+        opportunity_score += 2
+
+    # -----------------------------
     # Clamp
-    # -----------------------------------------------------
+    # -----------------------------
 
     opportunity_score = max(
         0,
@@ -1503,18 +2474,17 @@ def generate_sales_intel(
         ),
     )
 
-    # Remove duplicate reasons
     opportunity_reasons = list(
         dict.fromkeys(
             opportunity_reasons
         )
-    )[:10]
+    )[:12]
 
     recommendations = list(
         dict.fromkeys(
             recommendations
         )
-    )[:8]
+    )[:10]
 
     # =====================================================
     # OPPORTUNITY LEVEL
@@ -1522,13 +2492,10 @@ def generate_sales_intel(
 
     if opportunity_score >= 75:
         opportunity_level = "HOT"
-
     elif opportunity_score >= 55:
         opportunity_level = "HIGH"
-
     elif opportunity_score >= 35:
         opportunity_level = "MEDIUM"
-
     else:
         opportunity_level = "LOW"
 
@@ -1537,14 +2504,15 @@ def generate_sales_intel(
     # =====================================================
 
     has_major_conversion_gap = (
-        not conversion.get(
-            "has_form"
-        )
-        or not conversion.get(
-            "has_cta"
-        )
-        or not conversion.get(
-            "has_conversion_link"
+        not conversion.get("has_form")
+        or not conversion.get("has_cta")
+        or (
+            not conversion.get(
+                "has_conversion_link"
+            )
+            and not conversion.get(
+                "has_booking"
+            )
         )
     )
 
@@ -1554,14 +2522,17 @@ def generate_sales_intel(
         or not title
     )
 
+    has_tracking_gap = not any(
+        bool(value)
+        for value in trackers.values()
+    )
+
     if (
         opportunity_score >= 75
         and has_major_conversion_gap
     ):
-
         suggested_offer = (
-            "Website Redesign + "
-            "Lead Generation System"
+            "Website Redesign + Lead Generation System"
         )
 
         suggested_price = (
@@ -1574,15 +2545,14 @@ def generate_sales_intel(
         }
 
         service_reason = (
-            "Strong website and conversion "
-            "improvement opportunity."
+            "Strong commercial intent combined with "
+            "significant conversion improvement potential."
         )
 
     elif (
         opportunity_score >= 55
         and has_major_conversion_gap
     ):
-
         suggested_offer = (
             "Website Conversion Upgrade"
         )
@@ -1597,15 +2567,36 @@ def generate_sales_intel(
         }
 
         service_reason = (
-            "The site has identifiable "
-            "conversion friction."
+            "The business appears commercially active, "
+            "but the website has identifiable conversion friction."
+        )
+
+    elif (
+        opportunity_score >= 45
+        and has_tracking_gap
+    ):
+        suggested_offer = (
+            "Website + Analytics + Conversion Optimization"
+        )
+
+        suggested_price = (
+            "$600 - $1,200"
+        )
+
+        project_value = {
+            "min": 600,
+            "max": 1200,
+        }
+
+        service_reason = (
+            "The website has measurable marketing and "
+            "conversion improvements available."
         )
 
     elif (
         opportunity_score >= 35
         and has_major_seo_gap
     ):
-
         suggested_offer = (
             "SEO + Website Conversion Improvements"
         )
@@ -1625,7 +2616,6 @@ def generate_sales_intel(
         )
 
     elif opportunity_score >= 35:
-
         suggested_offer = (
             "Website Growth Optimization"
         )
@@ -1641,11 +2631,10 @@ def generate_sales_intel(
 
         service_reason = (
             "The website has smaller but "
-            "commercially relevant improvements."
+            "commercially relevant improvement opportunities."
         )
 
     else:
-
         suggested_offer = (
             "Website Review / Minor Optimization"
         )
@@ -1660,7 +2649,7 @@ def generate_sales_intel(
         }
 
         service_reason = (
-            "Only limited opportunities "
+            "Only limited commercial opportunities "
             "were detected."
         )
 
@@ -1668,13 +2657,15 @@ def generate_sales_intel(
     # OUTREACH
     # =====================================================
 
-    business_name = (
-        data.get("business_name")
-        or data.get("title")
-        or "your business"
+    business_name = clean_text(
+        data.get(
+            "business_name",
+            "",
+        )
     )
 
-    business_name = business_name.strip()
+    if not business_name:
+        business_name = "your business"
 
     display_reason = (
         opportunity_reasons[0]
@@ -1693,105 +2684,26 @@ def generate_sales_intel(
         f"Would you be open to seeing a quick preview?"
     )
 
-    # =====================================================
-    # RETURN
-    # =====================================================
-
     return {
-        # Website
         "website_score": website_score,
-        "seo_score": max(
-            0,
-            seo_score,
-        ),
-        "conversion_score": max(
-            0,
-            conversion_score,
-        ),
-        "technical_score": max(
-            0,
-            technical_score,
-        ),
-
-        # Sales
+        "seo_score": seo_score,
+        "conversion_score": conversion_score,
+        "technical_score": technical_score,
         "opportunity_score": opportunity_score,
         "opportunity_level": opportunity_level,
-
         "opportunity_reasons": opportunity_reasons,
-
         "recommendations": recommendations,
-
         "service_reason": service_reason,
-
-        # Offer
         "suggested_offer": suggested_offer,
         "suggested_price": suggested_price,
         "project_value": project_value,
-
-        # Problems
         "problems_found": list(
             dict.fromkeys(
                 problems
             )
-        ),
-
-        # Outreach
+        )[:15],
         "personalized_pitch": pitch,
     }
-
-
-# =========================================================
-# EMAIL EXTRACTION
-# =========================================================
-
-def extract_emails(
-    html_content: str,
-) -> list:
-
-    candidates = EMAIL_REGEX.findall(
-        html_content
-    )
-
-    emails = []
-    seen = set()
-
-    for email in candidates:
-
-        clean = email.strip().lower()
-
-        if clean in seen:
-            continue
-
-        # Ignore obvious asset/path artifacts
-        if clean.endswith(
-            (
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp",
-                ".gif",
-                ".svg",
-                ".css",
-                ".js",
-            )
-        ):
-            continue
-
-        # Ignore obvious placeholder examples
-        if clean.startswith(
-            (
-                "example@",
-                "test@",
-                "user@",
-                "name@",
-            )
-        ):
-            continue
-
-        emails.append(clean)
-        seen.add(clean)
-
-    return emails[:5]
 
 
 # =========================================================
@@ -1811,7 +2723,6 @@ async def process_single_url(
         return None
 
     try:
-
         response = await client.get(
             target_url,
             headers=HEADERS,
@@ -1820,6 +2731,7 @@ async def process_single_url(
         response.raise_for_status()
 
         html_content = response.text
+
         html_lower = html_content.lower()
 
         soup = BeautifulSoup(
@@ -1828,24 +2740,38 @@ async def process_single_url(
         )
 
         # -------------------------------------------------
+        # Final resolved URL
+        # -------------------------------------------------
+
+        final_url = str(
+            response.url
+        )
+
+        # -------------------------------------------------
         # Title
         # -------------------------------------------------
 
         title = ""
 
-        if soup.title and soup.title.string:
-            title = soup.title.string.strip()
+        if soup.title:
+            title = clean_text(
+                soup.title.get_text()
+            )
 
         # -------------------------------------------------
-        # Business Name
+        # Business name
         # -------------------------------------------------
 
-        business_name = extract_business_name(
+        (
+            business_name,
+            business_name_source,
+            business_name_confidence,
+        ) = extract_business_name(
             soup
         )
 
         # -------------------------------------------------
-        # Meta Description
+        # Meta description
         # -------------------------------------------------
 
         meta_tag = (
@@ -1871,13 +2797,15 @@ async def process_single_url(
 
         meta_description = ""
 
-        if (
-            meta_tag
-            and meta_tag.get("content")
-        ):
-            meta_description = (
-                meta_tag["content"].strip()
+        if meta_tag:
+            content = meta_tag.get(
+                "content"
             )
+
+            if isinstance(content, str):
+                meta_description = clean_text(
+                    content
+                )
 
         # -------------------------------------------------
         # H1
@@ -1888,15 +2816,23 @@ async def process_single_url(
         )
 
         h1_text = [
-            h1.get_text(
-                " ",
-                strip=True,
+            clean_text(
+                h1.get_text(
+                    " ",
+                    strip=True,
+                )
             )
             for h1 in h1_tags
+            if clean_text(
+                h1.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
         ]
 
         # -------------------------------------------------
-        # OG Image
+        # OG image
         # -------------------------------------------------
 
         og_image_tag = soup.find(
@@ -1908,21 +2844,22 @@ async def process_single_url(
 
         og_image = None
 
-        if (
-            og_image_tag
-            and og_image_tag.get("content")
-        ):
-            og_image = (
-                og_image_tag["content"].strip()
+        if og_image_tag:
+            content = og_image_tag.get(
+                "content"
             )
+
+            if isinstance(content, str):
+                og_image = clean_text(
+                    content
+                )
 
         # -------------------------------------------------
         # Contacts
         # -------------------------------------------------
 
         phones, socials = extract_contacts(
-            html_content,
-            soup,
+            soup
         )
 
         emails = extract_emails(
@@ -1951,14 +2888,15 @@ async def process_single_url(
         technical_signals = (
             extract_technical_signals(
                 soup,
-                html_content,
+                final_url,
             )
         )
 
         locale_signals = (
             detect_locale_signals(
                 soup,
-                target_url,
+                final_url,
+                phones,
             )
         )
 
@@ -1975,54 +2913,43 @@ async def process_single_url(
         # -------------------------------------------------
 
         raw_data = {
-            "url": target_url,
-
+            "url": final_url,
             "domain": get_domain(
-                target_url
+                final_url
             ),
-
-            "business_name": (
-                business_name
+            "business_name": business_name,
+            "business_name_source": (
+                business_name_source
             ),
-
+            "business_name_confidence": (
+                business_name_confidence
+            ),
             "title": title,
-
-            "meta_description":
-                meta_description,
-
-            "h1_count": len(
-                h1_tags
-            ),
-
+            "meta_description": meta_description,
+            "h1_count": len(h1_tags),
             "h1_tags": h1_text[:8],
-
             "og_image": og_image,
-
             "phones": phones,
-
             "emails": emails,
-
             "socials": socials,
-
             "tech_stack": tech_stack,
-
             "trackers": trackers,
-
-            "conversion_signals":
-                conversion_signals,
-
-            "technical_signals":
-                technical_signals,
-
-            "locale_signals":
-                locale_signals,
-
-            "business_signals":
-                business_signals,
+            "conversion_signals": (
+                conversion_signals
+            ),
+            "technical_signals": (
+                technical_signals
+            ),
+            "locale_signals": (
+                locale_signals
+            ),
+            "business_signals": (
+                business_signals
+            ),
         }
 
         # -------------------------------------------------
-        # Sales intelligence
+        # Intelligence
         # -------------------------------------------------
 
         intelligence = generate_sales_intel(
@@ -2036,7 +2963,6 @@ async def process_single_url(
         }
 
     except Exception as exc:
-
         return {
             "url": target_url,
             "status": "Failed",
@@ -2055,9 +2981,8 @@ async def scan_target(
         description="Target URL to scan",
     ),
 ):
-
     async with httpx.AsyncClient(
-        timeout=20.0,
+        timeout=25.0,
         follow_redirects=True,
     ) as client:
 
@@ -2071,14 +2996,12 @@ async def scan_target(
             or result.get("status")
             == "Failed"
         ):
-
             raise HTTPException(
                 status_code=500,
                 detail=(
                     result.get("error")
                     if result
-                    else
-                    "Unable to scan URL."
+                    else "Unable to scan URL."
                 ),
             )
 
@@ -2108,12 +3031,10 @@ async def bulk_scan_targets(
             "results": []
         }
 
-    # A concurrency limit prevents one batch from
-    # hammering many websites at the same time.
     semaphore = asyncio.Semaphore(8)
 
     async with httpx.AsyncClient(
-        timeout=20.0,
+        timeout=25.0,
         follow_redirects=True,
     ) as client:
 
@@ -2248,7 +3169,6 @@ async def generate_website(
     image_html = ""
 
     if og_image:
-
         safe_image = html_lib.escape(
             str(og_image),
             quote=True,
@@ -2265,7 +3185,6 @@ async def generate_website(
         """
 
     else:
-
         image_html = """
         <div class="hero-image-placeholder">
             <div class="placeholder-inner">
@@ -2281,7 +3200,6 @@ async def generate_website(
     contact_items = ""
 
     if phones:
-
         phone_value = str(
             phones[0]
         )
@@ -2294,7 +3212,7 @@ async def generate_website(
 
         contact_items += f"""
         <a
-            href="tel:{html_lib.escape(phone_href)}"
+            href="tel:{html_lib.escape(phone_href, quote=True)}"
             class="button button-dark"
         >
             Call Us
@@ -2302,14 +3220,13 @@ async def generate_website(
         """
 
     if emails:
-
         email_value = str(
             emails[0]
         )
 
         contact_items += f"""
         <a
-            href="mailto:{html_lib.escape(email_value)}"
+            href="mailto:{html_lib.escape(email_value, quote=True)}"
             class="button button-primary"
         >
             Send an Enquiry
@@ -2317,7 +3234,6 @@ async def generate_website(
         """
 
     if not contact_items:
-
         contact_items = """
         <a
             href="#contact"
@@ -2339,13 +3255,11 @@ async def generate_website(
         ("Facebook", "facebook"),
         ("X", "twitter"),
     ]:
-
         social_url = socials.get(
             key
         )
 
         if social_url:
-
             socials_html += f"""
             <a
                 href="{html_lib.escape(
@@ -2366,12 +3280,9 @@ async def generate_website(
 
     services_html = """
     <div class="cards">
-
         <article class="card">
             <div class="card-number">01</div>
-
             <h3>Professional Service</h3>
-
             <p>
                 A clear, credible way to present
                 your services and make it easier
@@ -2382,9 +3293,7 @@ async def generate_website(
 
         <article class="card">
             <div class="card-number">02</div>
-
             <h3>Simple Customer Journey</h3>
-
             <p>
                 Strong messaging and clear calls
                 to action help visitors quickly
@@ -2394,16 +3303,13 @@ async def generate_website(
 
         <article class="card">
             <div class="card-number">03</div>
-
             <h3>Built for Growth</h3>
-
             <p>
                 A flexible digital foundation
                 designed to support future
                 marketing and business growth.
             </p>
         </article>
-
     </div>
     """
 
@@ -2413,9 +3319,7 @@ async def generate_website(
 
     preview_html = f"""
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
 
 <meta charset="UTF-8">
@@ -2816,7 +3720,6 @@ footer {{
 
     </nav>
 
-
     <main>
 
         <section class="hero">
@@ -2851,7 +3754,6 @@ footer {{
 
         </section>
 
-
         <section class="section">
 
             <div class="section-label">
@@ -2873,7 +3775,6 @@ footer {{
             {services_html}
 
         </section>
-
 
         <section
             id="contact"
@@ -2898,7 +3799,6 @@ footer {{
 
     </main>
 
-
     <footer>
 
         <div class="footer-row">
@@ -2918,7 +3818,6 @@ footer {{
 </div>
 
 </body>
-
 </html>
 """
 
@@ -2935,11 +3834,10 @@ footer {{
 
 @app.get("/")
 async def root():
-
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "3.0.0",
+        "version": "4.0.0",
         "message": (
             "Global Sales Intelligence Engine"
         ),
@@ -2951,7 +3849,6 @@ async def root():
 # =========================================================
 
 if __name__ == "__main__":
-
     import uvicorn
 
     uvicorn.run(
