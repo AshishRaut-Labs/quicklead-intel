@@ -114,6 +114,22 @@ type LeadData = {
     commercial_navigation_signals?: number;
   };
 
+  contactability?: {
+    score?: number;
+    level?: string;
+    preferred_email?: string | null;
+    email_ready?: boolean;
+    reasons?: string[];
+  };
+
+  quality_signals?: {
+    template_residue_detected?: boolean;
+    template_residue_level?: string;
+    template_residue_score?: number;
+    template_residue_count?: number;
+    template_residue_matches?: string[];
+  };
+
   status?: string;
   error?: string;
 
@@ -133,6 +149,19 @@ type LeadData = {
 
     opportunity_reasons?: string[];
     recommendations?: string[];
+
+    prospect_score?: number;
+    prospect_decision?: string;
+    prospect_reasons?: string[];
+    manual_verification?: string[];
+
+    contactability_score?: number;
+    contactability_level?: string;
+    preferred_email?: string | null;
+    email_ready?: boolean;
+
+    template_residue_count?: number;
+    template_residue_level?: string;
 
     best_sales_angle?: string;
 
@@ -542,10 +571,14 @@ export default function QuickLeadDashboard() {
         (a, b) => {
           const aScore =
             a.intelligence
+              ?.prospect_score ??
+            a.intelligence
               ?.opportunity_score ??
             -1;
 
           const bScore =
+            b.intelligence
+              ?.prospect_score ??
             b.intelligence
               ?.opportunity_score ??
             -1;
@@ -1084,6 +1117,34 @@ export default function QuickLeadDashboard() {
             "",
         ],
         [
+          "Prospect Priority Score",
+          intel.prospect_score ??
+            "",
+        ],
+        [
+          "Prospect Decision",
+          intel.prospect_decision ??
+            "",
+        ],
+        [
+          "Contactability Score",
+          intel.contactability_score ??
+            data.contactability?.score ??
+            "",
+        ],
+        [
+          "Preferred Outreach Email",
+          intel.preferred_email ??
+            data.contactability?.preferred_email ??
+            "",
+        ],
+        [
+          "Template Residue Count",
+          intel.template_residue_count ??
+            data.quality_signals?.template_residue_count ??
+            "",
+        ],
+        [
           "Opportunity Level",
           intel.opportunity_level ??
             "",
@@ -1337,6 +1398,10 @@ export default function QuickLeadDashboard() {
           "Business Name Confidence",
           "Website Health",
           "Sales Opportunity",
+          "Prospect Priority",
+          "Prospect Decision",
+          "Contactability",
+          "Preferred Email",
           "Opportunity Level",
           "Lead Type",
           "Commercial Intent",
@@ -1394,6 +1459,16 @@ export default function QuickLeadDashboard() {
                 "",
               intel.opportunity_score ??
                 "",
+              intel.prospect_score ??
+                "",
+              intel.prospect_decision ??
+                "",
+              intel.contactability_score ??
+                item.contactability?.score ??
+                "",
+              intel.preferred_email ??
+                item.contactability?.preferred_email ??
+                "",
               intel.opportunity_level ??
                 "",
               intel.lead_type ||
@@ -1445,6 +1520,10 @@ export default function QuickLeadDashboard() {
             rows.push([
               index + 1,
               item.url || "",
+              "",
+              "",
+              "",
+              "",
               "",
               "",
               "",
@@ -1827,7 +1906,7 @@ export default function QuickLeadDashboard() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 min-w-[300px]">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 min-w-[300px]">
               {renderScoreCard(
                 "Website Health",
                 intel.website_score ??
@@ -1840,6 +1919,14 @@ export default function QuickLeadDashboard() {
                 intel.opportunity_score ??
                   0,
                 <TrendingUp className="w-4 h-4" />
+              )}
+
+              {renderScoreCard(
+                "Prospect Priority",
+                intel.prospect_score ??
+                  intel.opportunity_score ??
+                  0,
+                <Target className="w-4 h-4" />
               )}
             </div>
           </div>
@@ -1960,12 +2047,12 @@ export default function QuickLeadDashboard() {
               </h3>
 
               <p className="text-xs text-neutral-500 mt-0.5">
-                QuickLead's commercial classification for outreach prioritization.
+                QuickLead&apos;s commercial classification for outreach prioritization.
               </p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-7 gap-3">
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
               <p className="text-[10px] uppercase tracking-wider text-neutral-500">
                 Lead Type
@@ -2000,6 +2087,39 @@ export default function QuickLeadDashboard() {
                 {intel.commercial_intent ||
                   "Unknown"}
               </span>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Prospect Decision
+              </p>
+
+              <p className="text-base font-semibold text-blue-400 mt-2">
+                {intel.prospect_decision ||
+                  "Unknown"}
+              </p>
+
+              <p className="text-xs text-neutral-500 mt-1">
+                Score: {intel.prospect_score ?? 0}/100
+              </p>
+            </div>
+
+            <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+              <p className="text-[10px] uppercase tracking-wider text-neutral-500">
+                Contactability
+              </p>
+
+              <p className="text-base font-semibold text-green-400 mt-2">
+                {intel.contactability_level ||
+                  lead.contactability?.level ||
+                  "Unknown"}
+              </p>
+
+              <p className="text-xs text-neutral-500 mt-1 truncate">
+                {intel.preferred_email ||
+                  lead.contactability?.preferred_email ||
+                  "No preferred email"}
+              </p>
             </div>
 
             <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
@@ -3277,6 +3397,10 @@ export default function QuickLeadDashboard() {
                         </th>
 
                         <th className="p-3">
+                          Prospect
+                        </th>
+
+                        <th className="p-3">
                           Service
                         </th>
 
@@ -3461,6 +3585,29 @@ export default function QuickLeadDashboard() {
                                 ) : (
                                   <span className="text-red-400 text-xs">
                                     FAILED
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="p-3">
+                                {item.status ===
+                                "Success" ? (
+                                  <div className="flex flex-col gap-1">
+                                    <span className="font-bold text-green-400">
+                                      {intel.prospect_score ??
+                                        intel.opportunity_score ??
+                                        0}
+                                      /100
+                                    </span>
+
+                                    <span className="text-[9px] font-bold text-neutral-400">
+                                      {intel.prospect_decision ||
+                                        "VERIFY"}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-neutral-600">
+                                    —
                                   </span>
                                 )}
                               </td>

@@ -1,4 +1,4 @@
-# QuickLead Intel V6 - Global Sales Intelligence + Data Quality Engine
+# QuickLead Intel V6.3 - Prospect Decision + Data Quality Engine
 
 import asyncio
 import html as html_lib
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.2.0",
+    version="6.3.0",
 )
 
 app.add_middleware(
@@ -59,6 +59,66 @@ EMAIL_REGEX = re.compile(
     r"[A-Za-z0-9.\-]+"
     r"\.[A-Za-z]{2,}"
 )
+
+FREE_EMAIL_DOMAINS = {
+    "gmail.com",
+    "yahoo.com",
+    "outlook.com",
+    "hotmail.com",
+    "icloud.com",
+    "aol.com",
+    "proton.me",
+    "protonmail.com",
+}
+
+PLACEHOLDER_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "yourdomain.com",
+    "yourwebsite.com",
+    "website.com",
+}
+
+PLACEHOLDER_EMAIL_LOCAL_PARTS = {
+    "example",
+    "test",
+    "user",
+    "name",
+    "yourname",
+    "you",
+    "john",
+    "jane",
+}
+
+NON_CONTACT_EMAIL_LOCAL_PARTS = {
+    "noreply",
+    "no-reply",
+    "donotreply",
+    "do-not-reply",
+    "mailer-daemon",
+}
+
+BUSINESS_EMAIL_LOCAL_PARTS = {
+    "info",
+    "hello",
+    "contact",
+    "sales",
+    "office",
+    "admin",
+    "support",
+    "service",
+    "services",
+    "marketing",
+    "team",
+    "reception",
+    "enquiry",
+    "enquiries",
+    "inquiry",
+    "inquiries",
+    "accounting",
+    "rentals",
+}
 
 PHONE_CANDIDATE_REGEX = re.compile(
     r"""
@@ -947,6 +1007,50 @@ def looks_generic_business_name(
     return False
 
 
+def looks_like_agency_credit_element(
+    element,
+) -> bool:
+
+    try:
+        element_text = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        parent = getattr(
+            element,
+            "parent",
+            None,
+        )
+
+        parent_text = clean_text(
+            parent.get_text(
+                " ",
+                strip=True,
+            )
+        ) if parent else ""
+
+        context = (
+            f"{element_text} {parent_text}"
+        ).lower()
+
+        return bool(
+            re.search(
+                r"\b(?:website|site|web(?:site)?\s+design|"
+                r"web\s+development|marketing|seo|"
+                r"powered|designed|developed|built|created)"
+                r"\s+(?:by|from)\b",
+                context,
+                flags=re.I,
+            )
+        )
+
+    except Exception:
+        return False
+
+
 def clean_business_name_candidate(
     value: str,
 ) -> str:
@@ -956,6 +1060,17 @@ def clean_business_name_candidate(
     )
 
     if not value:
+        return ""
+
+    # Agency/website credits are not the client business name.
+    # Reject the whole candidate instead of accidentally turning
+    # "Website by Agency Name" into "Agency Name".
+    if re.search(
+        r"^(?:website|site|web(?:site)?\s+design|web\s+development|"
+        r"marketing|seo|powered|designed|developed|built|created)\s+by\b",
+        value,
+        flags=re.I,
+    ):
         return ""
 
     value = re.sub(
@@ -2140,6 +2255,11 @@ def extract_business_name(
             ],
         ):
 
+            if looks_like_agency_credit_element(
+                child
+            ):
+                continue
+
             child_text = clean_text(
                 child.get_text(
                     " ",
@@ -3084,13 +3204,18 @@ def extract_emails(
         ):
             continue
 
-        if clean.startswith(
-            (
-                "example@",
-                "test@",
-                "user@",
-                "name@",
-            )
+        if "@" not in clean:
+            continue
+
+        local_part, email_domain = clean.rsplit(
+            "@",
+            1,
+        )
+
+        if (
+            local_part in PLACEHOLDER_EMAIL_LOCAL_PARTS
+            or email_domain in PLACEHOLDER_EMAIL_DOMAINS
+            or local_part in NON_CONTACT_EMAIL_LOCAL_PARTS
         ):
             continue
 
@@ -3103,6 +3228,330 @@ def extract_emails(
         )
 
     return emails[:8]
+
+
+def score_email_for_outreach(
+    email: str,
+    site_domain: str,
+) -> dict:
+
+    clean = clean_text(
+        email
+    ).lower()
+
+    if "@" not in clean:
+        return {
+            "email": clean,
+            "score": 0,
+            "same_domain": False,
+            "role_address": False,
+            "free_provider": False,
+            "usable": False,
+        }
+
+    local_part, email_domain = clean.rsplit(
+        "@",
+        1,
+    )
+
+    site_domain = (
+        clean_text(site_domain)
+        .lower()
+        .removeprefix("www.")
+    )
+
+    placeholder = (
+        local_part in PLACEHOLDER_EMAIL_LOCAL_PARTS
+        or email_domain in PLACEHOLDER_EMAIL_DOMAINS
+        or local_part in NON_CONTACT_EMAIL_LOCAL_PARTS
+    )
+
+    same_domain = bool(
+        site_domain
+        and (
+            email_domain == site_domain
+            or email_domain.endswith(
+                f".{site_domain}"
+            )
+        )
+    )
+
+    role_address = (
+        local_part in BUSINESS_EMAIL_LOCAL_PARTS
+    )
+
+    free_provider = (
+        email_domain in FREE_EMAIL_DOMAINS
+    )
+
+    if placeholder:
+        score = 0
+    else:
+        score = 35
+
+        if same_domain:
+            score += 35
+
+        if role_address:
+            score += 15
+
+        if free_provider:
+            score -= 5
+
+        if len(local_part) >= 2:
+            score += 5
+
+    score = max(
+        0,
+        min(
+            100,
+            score,
+        ),
+    )
+
+    return {
+        "email": clean,
+        "score": score,
+        "same_domain": same_domain,
+        "role_address": role_address,
+        "free_provider": free_provider,
+        "usable": score >= 30,
+    }
+
+
+def build_contactability_signals(
+    site_url: str,
+    emails: list[str],
+    phones: list[str],
+    socials: dict,
+    conversion_signals: dict,
+) -> dict:
+
+    site_domain = get_domain(
+        site_url
+    )
+
+    email_profiles = [
+        score_email_for_outreach(
+            email,
+            site_domain,
+        )
+        for email in emails
+    ]
+
+    usable_emails = [
+        item
+        for item in email_profiles
+        if item.get(
+            "usable"
+        )
+    ]
+
+    preferred_email = ""
+    best_email_score = 0
+
+    if usable_emails:
+        best_email = max(
+            usable_emails,
+            key=lambda item: int(
+                item.get(
+                    "score",
+                    0,
+                )
+                or 0
+            ),
+        )
+
+        preferred_email = clean_text(
+            best_email.get(
+                "email",
+                "",
+            )
+        )
+
+        best_email_score = int(
+            best_email.get(
+                "score",
+                0,
+            )
+            or 0
+        )
+
+    score = round(
+        best_email_score * 0.65
+    )
+
+    if phones:
+        score += 20
+
+    if conversion_signals.get(
+        "has_form"
+    ):
+        score += 15
+
+    if conversion_signals.get(
+        "has_mailto"
+    ):
+        score += 5
+
+    if conversion_signals.get(
+        "has_whatsapp"
+    ):
+        score += 5
+
+    if any(
+        bool(value)
+        for value in socials.values()
+    ):
+        score += 5
+
+    score = max(
+        0,
+        min(
+            100,
+            score,
+        ),
+    )
+
+    if score >= 60:
+        level = "HIGH"
+    elif score >= 35:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    reasons: list[str] = []
+
+    if preferred_email:
+        reasons.append(
+            "Usable public email detected"
+        )
+
+    if any(
+        item.get(
+            "same_domain"
+        )
+        for item in usable_emails
+    ):
+        reasons.append(
+            "Business-domain email detected"
+        )
+
+    if phones:
+        reasons.append(
+            "Public phone detected"
+        )
+
+    if conversion_signals.get(
+        "has_form"
+    ):
+        reasons.append(
+            "Website contact form detected"
+        )
+
+    if not reasons:
+        reasons.append(
+            "No reliable contact route detected"
+        )
+
+    return {
+        "score": score,
+        "level": level,
+        "preferred_email": preferred_email or None,
+        "email_ready": bool(preferred_email),
+        "email_profiles": email_profiles[:8],
+        "reasons": reasons[:6],
+    }
+
+
+def detect_template_residue(
+    soup: BeautifulSoup,
+    html_content: str,
+) -> dict:
+
+    visible_text = clean_text(
+        soup.get_text(
+            " ",
+            strip=True,
+        )
+    ).lower()
+
+    html_lower = html_content.lower()
+
+    strong_patterns = {
+        "Lorem ipsum placeholder copy": r"\blorem\s+ipsum\b",
+        "Placeholder email: info@website.com": r"\binfo@website\.com\b",
+        "Placeholder email: you@example.com": r"\byou@example\.com\b",
+        "Placeholder email: john@example.com": r"\bjohn@example\.com\b",
+        "Placeholder email: jane@example.com": r"\bjane@example\.com\b",
+        "Placeholder domain reference": r"\b(?:example\.com|yourdomain\.com|yourwebsite\.com)\b",
+    }
+
+    weak_patterns = {
+        "Template CTA: Send Brief": r"\bsend\s+brief\b",
+        "Template CTA: Go to Shop": r"\bgo\s+to\s+shop\b",
+        "Visible placeholder wording": r"\bplaceholder\s+(?:text|content|copy|image)\b",
+        "Visible sample wording": r"\bsample\s+(?:text|content|copy)\b",
+        "Generic 'Your Company' copy": r"\byour\s+company\b",
+    }
+
+    matches: list[str] = []
+    strong_count = 0
+    weak_count = 0
+
+    for label, pattern in strong_patterns.items():
+        if (
+            re.search(
+                pattern,
+                visible_text,
+                flags=re.I,
+            )
+            or re.search(
+                pattern,
+                html_lower,
+                flags=re.I,
+            )
+        ):
+            matches.append(
+                label
+            )
+            strong_count += 1
+
+    for label, pattern in weak_patterns.items():
+        if re.search(
+            pattern,
+            visible_text,
+            flags=re.I,
+        ):
+            matches.append(
+                label
+            )
+            weak_count += 1
+
+    severity_score = min(
+        100,
+        strong_count * 35
+        + weak_count * 15,
+    )
+
+    if strong_count >= 1 or weak_count >= 2:
+        level = "HIGH"
+    elif weak_count == 1:
+        level = "MEDIUM"
+    else:
+        level = "NONE"
+
+    return {
+        "template_residue_detected": bool(
+            matches
+        ),
+        "template_residue_level": level,
+        "template_residue_score": severity_score,
+        "template_residue_count": len(
+            matches
+        ),
+        "template_residue_matches": matches[:10],
+    }
 
 
 # =========================================================
@@ -4430,6 +4879,35 @@ def generate_sales_intel(
         {},
     )
 
+    contactability = data.get(
+        "contactability",
+        {},
+    )
+
+    quality_signals = data.get(
+        "quality_signals",
+        {},
+    )
+
+    try:
+        contactability_score = int(
+            contactability.get(
+                "score",
+                0,
+            )
+            or 0
+        )
+    except (TypeError, ValueError):
+        contactability_score = 0
+
+    template_residue_count = int(
+        quality_signals.get(
+            "template_residue_count",
+            0,
+        )
+        or 0
+    )
+
     business_name = clean_business_name_candidate(
         data.get(
             "business_name",
@@ -4956,6 +5434,32 @@ def generate_sales_intel(
 
         opportunity_score += 1
 
+    if quality_signals.get(
+        "template_residue_detected"
+    ):
+        residue_boost = min(
+            14,
+            6 + template_residue_count * 3,
+        )
+
+        opportunity_score += residue_boost
+
+        opportunity_reasons.append(
+            "Visible template or placeholder residue detected"
+        )
+
+        recommendations.append(
+            "Remove unfinished template content and tighten brand consistency"
+        )
+
+    # A prospect is more actionable when there is a real
+    # public contact route. Keep this small so contactability
+    # does not masquerade as website quality.
+    if contactability_score >= 70:
+        opportunity_score += 3
+    elif contactability_score < 20:
+        opportunity_score -= 5
+
     opportunity_score = max(
         0,
         min(
@@ -5047,6 +5551,107 @@ def generate_sales_intel(
     else:
 
         opportunity_level = "LOW"
+
+    # =====================================================
+    # PROSPECT PRIORITY
+    # =====================================================
+
+    identity_score = max(
+        0,
+        min(
+            100,
+            business_name_confidence,
+        ),
+    )
+
+    prospect_score = round(
+        opportunity_score * 0.60
+        + contactability_score * 0.30
+        + identity_score * 0.10
+    )
+
+    if commercial_intent == "HIGH":
+        prospect_score += 5
+    elif commercial_intent == "MEDIUM":
+        prospect_score += 2
+
+    prospect_score = max(
+        0,
+        min(
+            100,
+            prospect_score,
+        ),
+    )
+
+    preferred_email = clean_text(
+        contactability.get(
+            "preferred_email",
+            "",
+        )
+    )
+
+    if (
+        prospect_score >= 60
+        and preferred_email
+        and opportunity_score >= 40
+    ):
+        prospect_decision = "CONTACT"
+    elif (
+        prospect_score >= 45
+        and opportunity_score >= 35
+    ):
+        prospect_decision = "VERIFY"
+    else:
+        prospect_decision = "SKIP"
+
+    prospect_reasons: list[str] = []
+
+    if opportunity_score >= 55:
+        prospect_reasons.append(
+            "Meaningful website improvement opportunity"
+        )
+
+    if contactability_score >= 70:
+        prospect_reasons.append(
+            "Strong public contactability"
+        )
+    elif not preferred_email:
+        prospect_reasons.append(
+            "No preferred outreach email verified from the page"
+        )
+
+    if business_name_confidence >= 75:
+        prospect_reasons.append(
+            "Business identity confidence is strong"
+        )
+
+    if quality_signals.get(
+        "template_residue_detected"
+    ):
+        prospect_reasons.append(
+            "Template residue creates a concrete redesign angle"
+        )
+
+    manual_verification: list[str] = []
+
+    if not conversion.get(
+        "has_cta"
+    ):
+        manual_verification.append(
+            "Verify visible CTA in a rendered browser"
+        )
+
+    if not conversion.get(
+        "has_form"
+    ):
+        manual_verification.append(
+            "Verify forms or booking widgets after JavaScript renders"
+        )
+
+    if business_name_confidence < 75:
+        manual_verification.append(
+            "Verify business identity against the live site"
+        )
 
     # =====================================================
     # SERVICE / OFFER
@@ -5309,6 +5914,25 @@ def generate_sales_intel(
 
         "opportunity_score": opportunity_score,
         "opportunity_level": opportunity_level,
+
+        "prospect_score": prospect_score,
+        "prospect_decision": prospect_decision,
+        "prospect_reasons": prospect_reasons[:8],
+        "manual_verification": manual_verification[:8],
+
+        "contactability_score": contactability_score,
+        "contactability_level": contactability.get(
+            "level",
+            "LOW",
+        ),
+        "preferred_email": preferred_email or None,
+        "email_ready": bool(preferred_email),
+
+        "template_residue_count": template_residue_count,
+        "template_residue_level": quality_signals.get(
+            "template_residue_level",
+            "NONE",
+        ),
 
         "opportunity_reasons": opportunity_reasons,
         "recommendations": recommendations,
@@ -6124,6 +6748,23 @@ async def process_single_url(
             )
         )
 
+        contactability = (
+            build_contactability_signals(
+                final_url,
+                emails,
+                phones,
+                socials,
+                conversion_signals,
+            )
+        )
+
+        quality_signals = (
+            detect_template_residue(
+                soup,
+                html_content,
+            )
+        )
+
         # -------------------------------------------------
         # Raw data
         # -------------------------------------------------
@@ -6173,6 +6814,14 @@ async def process_single_url(
 
             "business_signals": (
                 business_signals
+            ),
+
+            "contactability": (
+                contactability
+            ),
+
+            "quality_signals": (
+                quality_signals
             ),
         }
 
