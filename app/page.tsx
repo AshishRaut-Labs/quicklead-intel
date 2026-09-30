@@ -40,11 +40,17 @@ import {
   Gauge,
 } from "lucide-react";
 
-const API_BASE = "https://quicklead-intel.onrender.com";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE ||
+  "https://quicklead-intel.onrender.com";
 
 type Mode = "single" | "bulk";
 
 type LeadData = {
+  input_url?: string;
+  resolved_url?: string;
+  attempted_urls?: string[];
+
   url?: string;
   domain?: string;
 
@@ -116,10 +122,22 @@ type LeadData = {
 
   contactability?: {
     score?: number;
+    static_score?: number;
     level?: string;
+    verification_required?: boolean;
     preferred_email?: string | null;
     email_ready?: boolean;
     reasons?: string[];
+  };
+
+  conversion_evidence?: {
+    status?: string;
+    confirmed_present?: string[];
+    unverified_missing?: string[];
+    render_verification_required?: boolean;
+    has_contact_path?: boolean;
+    has_booking_path?: boolean;
+    note?: string;
   };
 
   quality_signals?: {
@@ -1064,6 +1082,16 @@ export default function QuickLeadDashboard() {
           "Value",
         ],
         [
+          "Input URL",
+          data.input_url || "",
+        ],
+        [
+          "Resolved URL",
+          data.resolved_url ||
+            data.url ||
+            "",
+        ],
+        [
           "URL",
           data.url || "",
         ],
@@ -1131,6 +1159,24 @@ export default function QuickLeadDashboard() {
           intel.contactability_score ??
             data.contactability?.score ??
             "",
+        ],
+        [
+          "Contactability Status",
+          intel.contactability_level ??
+            data.contactability?.level ??
+            "",
+        ],
+        [
+          "Conversion Evidence",
+          data.conversion_evidence?.status ??
+            "",
+        ],
+        [
+          "Unverified Conversion Signals",
+          (
+            data.conversion_evidence?.unverified_missing ||
+            []
+          ).join(" | "),
         ],
         [
           "Preferred Outreach Email",
@@ -1392,6 +1438,8 @@ export default function QuickLeadDashboard() {
       )[][] = [
         [
           "Rank",
+          "Input URL",
+          "Resolved URL",
           "URL",
           "Domain",
           "Business Name",
@@ -1401,6 +1449,8 @@ export default function QuickLeadDashboard() {
           "Prospect Priority",
           "Prospect Decision",
           "Contactability",
+          "Contactability Status",
+          "Conversion Evidence",
           "Preferred Email",
           "Opportunity Level",
           "Lead Type",
@@ -1421,6 +1471,8 @@ export default function QuickLeadDashboard() {
           "Top Sales Reasons",
           "Phone",
           "Email",
+          "Scan Status",
+          "Error",
         ],
       ];
 
@@ -1447,6 +1499,10 @@ export default function QuickLeadDashboard() {
 
             rows.push([
               index + 1,
+              item.input_url || "",
+              item.resolved_url ||
+                item.url ||
+                "",
               item.url || "",
               item.domain || "",
               item.business_name ||
@@ -1465,6 +1521,11 @@ export default function QuickLeadDashboard() {
                 "",
               intel.contactability_score ??
                 item.contactability?.score ??
+                "",
+              intel.contactability_level ??
+                item.contactability?.level ??
+                "",
+              item.conversion_evidence?.status ??
                 "",
               intel.preferred_email ??
                 item.contactability?.preferred_email ??
@@ -1515,40 +1576,41 @@ export default function QuickLeadDashboard() {
               item.emails
                 ?.join(" | ") ||
                 "",
+              "Success",
+              "",
             ]);
           } else {
-            rows.push([
-              index + 1,
-              item.url || "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "FAILED",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
-              "",
+            const failedRow: (
+              | string
+              | number
+              | boolean
+            )[] = new Array(
+              rows[0].length
+            ).fill(
+              ""
+            );
+
+            failedRow[0] = index + 1;
+            failedRow[1] =
+              item.input_url || "";
+            failedRow[2] =
+              item.resolved_url ||
+              item.url ||
+              "";
+            failedRow[3] =
+              item.url || "";
+            failedRow[
+              failedRow.length - 2
+            ] = "FAILED";
+            failedRow[
+              failedRow.length - 1
+            ] =
               item.error ||
-                "Scan failed",
-              "",
-              "",
-            ]);
+              "Scan failed";
+
+            rows.push(
+              failedRow
+            );
           }
         }
       );

@@ -1,4 +1,4 @@
-# QuickLead Intel V6.3 - Prospect Decision + Data Quality Engine
+# QuickLead Intel V6.5.5 - Bulk Network Reliability
 
 import asyncio
 import html as html_lib
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.3.0",
+    version="6.5.5",
 )
 
 app.add_middleware(
@@ -47,6 +47,46 @@ HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+# Keep bulk scans conservative. Reliability matters more than shaving a few
+# seconds off a 20-50 site run, especially on consumer DNS/network links.
+BULK_SCAN_CONCURRENCY = 4
+FETCH_RETRY_ROUNDS = 3
+FETCH_RETRY_BACKOFF_SECONDS = (0.45, 1.0)
+
+
+def build_http_timeout() -> httpx.Timeout:
+    """Bound connection/pool waits without making normal pages too fragile."""
+    return httpx.Timeout(
+        25.0,
+        connect=8.0,
+        pool=5.0,
+    )
+
+
+def build_http_limits() -> httpx.Limits:
+    """Avoid opening a large burst of sockets during bulk scans."""
+    return httpx.Limits(
+        max_connections=8,
+        max_keepalive_connections=4,
+        keepalive_expiry=10.0,
+    )
+
+
+def describe_http_error(exc: Exception) -> str:
+    """Return a useful network error instead of only `ConnectError`."""
+    parts: list[str] = []
+    current: Optional[BaseException] = exc
+    seen: set[int] = set()
+
+    while current is not None and id(current) not in seen and len(parts) < 3:
+        seen.add(id(current))
+        label = current.__class__.__name__
+        detail = clean_text(str(current))
+        parts.append(f"{label}: {detail}" if detail else label)
+        current = current.__cause__ or current.__context__
+
+    return " <- ".join(parts)
 
 
 # =========================================================
@@ -97,6 +137,15 @@ NON_CONTACT_EMAIL_LOCAL_PARTS = {
     "donotreply",
     "do-not-reply",
     "mailer-daemon",
+}
+
+# Telemetry / platform implementation addresses are not prospect contacts.
+# Keep this deliberately conservative: only well-known machine-generated
+# domains/patterns are filtered.
+TECHNICAL_EMAIL_DOMAIN_SUFFIXES = {
+    "wixpress.com",
+    "sentry.io",
+    "sentry-cdn.com",
 }
 
 BUSINESS_EMAIL_LOCAL_PARTS = {
@@ -554,6 +603,28 @@ INDIA_LOCATION_CLUES = {
     "cin",
 }
 
+US_STATE_ABBREVIATIONS = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "DC",
+}
+
+US_STATE_NAMES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho",
+    "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana",
+    "maine", "maryland", "massachusetts", "michigan", "minnesota",
+    "mississippi", "missouri", "montana", "nebraska", "nevada",
+    "new hampshire", "new jersey", "new mexico", "new york",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
+    "pennsylvania", "rhode island", "south carolina", "south dakota",
+    "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+    "west virginia", "wisconsin", "wyoming", "district of columbia",
+}
+
 COUNTRY_NAMES = {
     "india": "IN",
     "united states": "US",
@@ -838,12 +909,16 @@ INDICATIVE_USD_RATES = {
 # =========================================================
 
 def normalize_url(raw_url: str) -> str:
-    value = (raw_url or "").strip()
+    """Return a safe first-choice HTTP(S) URL without doing network I/O."""
+
+    value = clean_text(
+        raw_url
+    )
 
     if not value:
         return ""
 
-    if value.startswith(
+    if value.lower().startswith(
         (
             "http://",
             "https://",
@@ -852,6 +927,216 @@ def normalize_url(raw_url: str) -> str:
         return value
 
     return f"https://{value}"
+
+
+def build_url_candidates(
+    raw_url: str,
+) -> list[str]:
+    """Build resilient http/https + www/non-www candidates."""
+
+    value = clean_text(
+        raw_url
+    )
+
+    if not value:
+        return []
+
+    has_explicit_scheme = bool(
+        re.match(
+            r"^https?://",
+            value,
+            flags=re.I,
+        )
+    )
+
+    parse_target = (
+        value
+        if has_explicit_scheme
+        else f"//{value}"
+    )
+
+    try:
+        parsed = urllib.parse.urlparse(
+            parse_target
+        )
+    except Exception:
+        return [normalize_url(value)]
+
+    host = clean_text(
+        parsed.netloc
+    ).lower()
+
+    if not host:
+        return [normalize_url(value)]
+
+    host = host.split("@")[-1]
+
+    path = parsed.path or ""
+    query = f"?{parsed.query}" if parsed.query else ""
+    fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+    suffix = f"{path}{query}{fragment}"
+
+    bare_host = host.removeprefix("www.")
+    www_host = f"www.{bare_host}"
+
+    explicit_scheme = (
+        parsed.scheme.lower()
+        if has_explicit_scheme
+        else ""
+    )
+
+    candidates: list[str] = []
+
+    def add(
+        scheme: str,
+        candidate_host: str,
+    ) -> None:
+        candidate = f"{scheme}://{candidate_host}{suffix}"
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    if explicit_scheme in {
+        "http",
+        "https",
+    }:
+        add(explicit_scheme, host)
+        add(
+            explicit_scheme,
+            bare_host if host.startswith("www.") else www_host,
+        )
+
+        alternate_scheme = (
+            "http"
+            if explicit_scheme == "https"
+            else "https"
+        )
+
+        add(alternate_scheme, host)
+        add(
+            alternate_scheme,
+            bare_host if host.startswith("www.") else www_host,
+        )
+
+    else:
+        add("https", bare_host)
+        add("https", www_host)
+        add("http", bare_host)
+        add("http", www_host)
+
+    return candidates
+
+
+def canonical_url_key(
+    raw_url: str,
+) -> str:
+    """Deduplicate equivalent scheme/www variants in bulk input."""
+
+    normalized = normalize_url(raw_url)
+
+    if not normalized:
+        return ""
+
+    try:
+        parsed = urllib.parse.urlparse(normalized)
+        host = (
+            parsed.netloc
+            .lower()
+            .split("@")[-1]
+            .split(":")[0]
+            .removeprefix("www.")
+        )
+        path = parsed.path.rstrip("/") or "/"
+        return f"{host}{path}?{parsed.query}"
+    except Exception:
+        return normalized.casefold()
+
+
+async def fetch_url_with_fallback(
+    client: httpx.AsyncClient,
+    raw_url: str,
+) -> tuple[httpx.Response, list[str]]:
+    """Fetch a site with URL fallback plus bounded transient-network retries.
+
+    Each round tries HTTPS/HTTP and www/non-www variants. A second/third round
+    is used only when we saw a transient connection/protocol/timeout failure.
+    Normal 4xx responses are not retried endlessly.
+    """
+
+    candidates = build_url_candidates(raw_url)
+
+    if not candidates:
+        raise ValueError("A website URL is required.")
+
+    attempts: list[str] = []
+    failures: list[str] = []
+
+    transient_errors = (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.RemoteProtocolError,
+    )
+    transient_statuses = {408, 425, 429, 500, 502, 503, 504}
+
+    for round_index in range(FETCH_RETRY_ROUNDS):
+        saw_transient_failure = False
+
+        for candidate in candidates:
+            if candidate not in attempts:
+                attempts.append(candidate)
+
+            try:
+                response = await client.get(
+                    candidate,
+                    headers=HEADERS,
+                )
+
+                if response.status_code >= 400:
+                    failures.append(
+                        f"round {round_index + 1} {candidate} -> "
+                        f"HTTP {response.status_code}"
+                    )
+                    if response.status_code in transient_statuses:
+                        saw_transient_failure = True
+                    continue
+
+                return response, attempts
+
+            except transient_errors as exc:
+                saw_transient_failure = True
+                failures.append(
+                    f"round {round_index + 1} {candidate} -> "
+                    f"{describe_http_error(exc)}"
+                )
+
+            except httpx.HTTPError as exc:
+                failures.append(
+                    f"round {round_index + 1} {candidate} -> "
+                    f"{describe_http_error(exc)}"
+                )
+
+        if not saw_transient_failure:
+            break
+
+        if round_index < FETCH_RETRY_ROUNDS - 1:
+            backoff_index = min(
+                round_index,
+                len(FETCH_RETRY_BACKOFF_SECONDS) - 1,
+            )
+            await asyncio.sleep(
+                FETCH_RETRY_BACKOFF_SECONDS[backoff_index]
+            )
+
+    # Keep the message compact enough for CSV/UI while still exposing the
+    # underlying network cause and whether retries were attempted.
+    failure_summary = "; ".join(failures[-8:])
+
+    raise RuntimeError(
+        "Unable to fetch the website after resilient URL fallback/retries"
+        + (f": {failure_summary}" if failure_summary else ".")
+    )
 
 
 def get_domain(url: str) -> str:
@@ -891,6 +1176,79 @@ def clean_text(
     ).strip()
 
 
+def looks_like_non_brand_phrase(
+    value: str,
+) -> bool:
+    """Reject short UI/review/sentence fragments that mimic brand names.
+
+    Keep this rule pattern-based rather than site-specific so stress-test
+    discoveries improve the general scanner instead of overfitting domains.
+    """
+
+    raw = clean_text(value)
+    lowered = raw.casefold()
+
+    if not lowered:
+        return True
+
+    # Navigation / content labels such as "Our team" or "Our Yelp profile".
+    if re.match(
+        r"^(?:our|your|their|my|this|that)\s+"
+        r"(?:team|staff|profile|story|reviews?|services?|work|clients?|"
+        r"customers?|company|practice|office|locations?|blog|gallery|"
+        r"mission|values?|yelp|google|facebook|instagram|linkedin)\b",
+        lowered,
+    ):
+        return True
+
+    # Review/social-platform UI text is not the site's business identity.
+    if re.search(
+        r"\b(?:yelp|google|facebook|instagram|linkedin|tripadvisor|houzz)\b"
+        r".{0,30}\b(?:profile|page|reviews?|listing)\b",
+        lowered,
+    ):
+        return True
+
+    # Short sentence fragments such as "Nick and Ivy." should not outrank
+    # explicit title/header/footer business identity. Preserve legal-name
+    # endings such as "Co." / "Inc." / "DDS.".
+    words = re.findall(r"[a-z0-9&'’.-]+", lowered)
+    has_terminal_sentence_punctuation = bool(
+        re.search(r"[!?]$", raw)
+        or (
+            raw.endswith(".")
+            and not re.search(
+                r"\b(?:co|inc|corp|ltd|llc|pllc|pc|pa|dds|dmd)\.$",
+                lowered,
+            )
+        )
+    )
+
+    if (
+        has_terminal_sentence_punctuation
+        and 2 <= len(words) <= 6
+        and re.search(r"\b(?:and|we|you|our|your|their|his|her)\b", lowered)
+    ):
+        return True
+
+    # Short slogan fragments such as "start to finish." can be captured by
+    # visible-text brand regexes even though they are not business names.
+    # Keep legal/business-looking names exempt from this sentence-fragment rule.
+    if (
+        has_terminal_sentence_punctuation
+        and 2 <= len(words) <= 5
+        and re.search(r"\b(?:to|from|with|for)\b", lowered)
+        and not re.search(
+            r"\b(?:llc|pllc|inc|corp|ltd|company|group|realty|dental|dentistry|"
+            r"builders?|construction|contractors?|management|properties|services?)\b",
+            lowered,
+        )
+    ):
+        return True
+
+    return False
+
+
 def looks_generic_business_name(
     value: str,
 ) -> bool:
@@ -927,6 +1285,9 @@ def looks_generic_business_name(
         r"[a-zA-Z]",
         text,
     ):
+        return True
+
+    if looks_like_non_brand_phrase(value):
         return True
 
     action_words = [
@@ -1536,6 +1897,749 @@ def business_name_matches_domain(
     )
 
 
+def business_names_equivalent(
+    left: str,
+    right: str,
+) -> bool:
+    """Return True only when two names are effectively the same identity.
+
+    Unlike business_name_matches_domain(), a single shared token is not enough.
+    That distinction lets "Chicago" lose to "Fairy Cleaning Chicago" while
+    still treating small punctuation/legal-suffix variants as equivalent.
+    """
+
+    def tokens(value: str) -> list[str]:
+        cleaned = clean_business_name_candidate(
+            value
+        ).casefold()
+
+        parts = re.findall(
+            r"[a-z0-9]+",
+            cleaned,
+        )
+
+        legal_noise = {
+            "llc", "pllc", "inc", "corp", "corporation",
+            "ltd", "limited", "co", "company", "pc", "pa",
+        }
+
+        return [
+            part
+            for part in parts
+            if part not in legal_noise
+        ]
+
+    left_tokens = tokens(left)
+    right_tokens = tokens(right)
+
+    if not left_tokens or not right_tokens:
+        return False
+
+    if left_tokens == right_tokens:
+        return True
+
+    left_compact = "".join(left_tokens)
+    right_compact = "".join(right_tokens)
+
+    if left_compact == right_compact:
+        return True
+
+    if min(len(left_tokens), len(right_tokens)) < 2:
+        return False
+
+    overlap = len(
+        set(left_tokens).intersection(
+            right_tokens
+        )
+    )
+
+    shorter = min(
+        len(set(left_tokens)),
+        len(set(right_tokens)),
+    )
+
+    return bool(
+        shorter
+        and overlap / shorter >= 0.8
+    )
+
+
+def looks_like_seo_marketing_title(
+    value: str,
+) -> bool:
+    normalized = clean_text(
+        value
+    ).casefold()
+
+    if not normalized:
+        return True
+
+    if re.search(
+        r"^(?:best|top|cheap|affordable|local|leading|expert|professional)\b",
+        normalized,
+    ):
+        return True
+
+    if re.search(
+        r"\b(?:near me|services? in|service in|company in|contractors? in|dentist in|plumber in|hvac in)\b",
+        normalized,
+    ):
+        return True
+
+    return False
+
+
+def title_identity_matches_domain(
+    business_name: str,
+    inferred_name: str,
+) -> bool:
+    """Return True when a title brand is plausibly encoded in the domain.
+
+    This is deliberately conservative: the first meaningful title token must
+    appear in the inferred domain identity, and at least two meaningful title
+    tokens/stems should match. It protects cases such as
+    "VIP Air Conditioning & Heating" vs "vipairheat" without letting
+    generic SEO titles automatically beat the domain fallback.
+    """
+
+    title_words = [
+        word
+        for word in re.findall(
+            r"[a-z0-9]+",
+            clean_business_name_candidate(
+                business_name
+            ).casefold(),
+        )
+        if len(word) >= 3
+    ]
+
+    domain_compact = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        clean_business_name_candidate(
+            inferred_name
+        ).casefold(),
+    )
+
+    if not title_words or not domain_compact:
+        return False
+
+    def token_matches(word: str) -> bool:
+        if word in domain_compact:
+            return True
+
+        if len(word) >= 5:
+            return word[:4] in domain_compact
+
+        return False
+
+    first_token_matches = token_matches(
+        title_words[0]
+    )
+
+    # One-word brands can legitimately be the entire domain identity
+    # (for example, a brand like HomeScoutz).
+    if (
+        len(title_words) == 1
+        and first_token_matches
+    ):
+        return True
+
+    # Some SMB domains compress the brand plus descriptor initials, e.g.
+    # "Omyra Property Management" -> "omyrapm". Treat that as domain
+    # consensus without allowing an unrelated geo/service title to win.
+    if first_token_matches and len(title_words) >= 2:
+        trailing_initials = "".join(
+            word[0]
+            for word in title_words[1:]
+            if word
+        )
+        if (
+            len(trailing_initials) >= 2
+            and trailing_initials in domain_compact
+        ):
+            return True
+
+    # Other brands use initials for the whole visible name, e.g. a domain
+    # like "hsrpm" can still strongly support "Home Spot Rentals".
+    if len(title_words) >= 2:
+        full_initials = "".join(
+            word[0]
+            for word in title_words
+            if word
+        )
+        if (
+            len(full_initials) >= 3
+            and domain_compact.startswith(full_initials)
+        ):
+            return True
+
+    if not first_token_matches:
+        return False
+
+    match_count = sum(
+        1
+        for word in title_words
+        if token_matches(word)
+    )
+
+    return match_count >= 2
+
+
+def extract_page_title_identity_candidate(
+    soup: BeautifulSoup,
+    inferred_domain_name: str = "",
+) -> tuple[str, str, int]:
+
+    if not soup.title:
+        return (
+            "",
+            "unknown",
+            0,
+        )
+
+    page_title = clean_text(
+        soup.title.get_text()
+    )
+
+    if not page_title:
+        return (
+            "",
+            "unknown",
+            0,
+        )
+
+    normalized_title = page_title
+
+    for separator in [
+        " | ",
+        " - ",
+        " — ",
+        " – ",
+        " :: ",
+        ": ",
+    ]:
+        normalized_title = normalized_title.replace(
+            separator,
+            " | ",
+        )
+
+    parts = [
+        clean_text(part)
+        for part in normalized_title.split(" | ")
+        if clean_text(part)
+    ]
+
+    if not parts:
+        parts = [page_title]
+
+    candidates: list[tuple[str, str, int, int, int]] = []
+
+    state_pattern = "|".join(
+        sorted(
+            US_STATE_ABBREVIATIONS
+        )
+    )
+
+    for index, part in enumerate(parts):
+        value = clean_business_name_candidate(
+            part
+        )
+        word_count = len(
+            value.split()
+        )
+
+        # Do not mistake a location-only title fragment such as
+        # "Arlington, TX" for the business identity.
+        if re.fullmatch(
+            rf"[A-Za-z .'-]+,?\s+(?:{state_pattern})(?:\s+\d{{5}}(?:-\d{{4}})?)?",
+            value,
+            re.I,
+        ):
+            continue
+
+        if not (
+            2 <= len(value) <= 100
+            and 1 <= word_count <= 9
+            and name_quality(value) >= 45
+            and not looks_generic_business_name(value)
+            and not looks_like_seo_marketing_title(value)
+        ):
+            continue
+
+        confidence = 90
+
+        if word_count == 1:
+            confidence = 76
+
+        # The first title segment is commonly the actual brand name, but
+        # domain-aligned brand text is stronger than an unrelated practitioner
+        # or agency name. This helps cases such as:
+        #   "Myles Williams, DDS | Atlanta Dental Arts"
+        # where the site's domain clearly encodes the practice brand.
+        position_bonus = (
+            18
+            if index == 0
+            else 0
+        )
+
+        domain_bonus = (
+            40
+            if (
+                inferred_domain_name
+                and title_identity_matches_domain(
+                    value,
+                    inferred_domain_name,
+                )
+            )
+            else 0
+        )
+
+        candidates.append(
+            (
+                value,
+                "title_identity",
+                confidence,
+                position_bonus,
+                domain_bonus,
+            )
+        )
+
+    if candidates:
+        candidates.sort(
+            key=lambda item: (
+                item[2] + item[3] + item[4],
+                name_quality(item[0]),
+                -len(item[0]),
+            ),
+            reverse=True,
+        )
+        best = candidates[0]
+        return (
+            best[0],
+            best[1],
+            best[2],
+        )
+
+    return (
+        "",
+        "unknown",
+        0,
+    )
+
+
+def business_identity_has_non_agency_visible_mention(
+    soup: BeautifulSoup,
+    business_name: str,
+) -> bool:
+
+    needle = clean_business_name_candidate(
+        business_name
+    ).casefold()
+
+    if not needle:
+        return False
+
+    for element in soup.find_all(
+        [
+            "h1", "h2", "h3", "h4",
+            "p", "span", "a", "strong", "b",
+        ]
+    ):
+        text = clean_text(
+            element.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        if not text:
+            continue
+
+        if needle not in text.casefold():
+            continue
+
+        if looks_like_agency_credit_element(
+            element
+        ):
+            continue
+
+        return True
+
+    return False
+
+
+def extract_visible_business_identity_candidate(
+    soup: BeautifulSoup,
+) -> tuple[str, str, int]:
+    """Find a concise business identity that is visibly presented to users.
+
+    This is used as a conflict guard when structured metadata names an agency
+    or platform instead of the actual site owner.
+    """
+
+    candidates: list[tuple[str, str, int]] = []
+
+    for tag_name in ["h1", "h2"]:
+        for element in soup.find_all(tag_name)[:12]:
+            value = clean_business_name_candidate(
+                element.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            if not value:
+                continue
+
+            word_count = len(
+                value.split()
+            )
+
+            if not (
+                2 <= len(value) <= 90
+                and 1 <= word_count <= 8
+                and name_quality(value) >= 45
+                and not looks_generic_business_name(value)
+                and not looks_like_seo_marketing_title(value)
+            ):
+                continue
+
+            confidence = (
+                92
+                if tag_name == "h1"
+                else 84
+            )
+
+            candidates.append(
+                (
+                    value,
+                    f"visible_{tag_name}_identity",
+                    confidence,
+                )
+            )
+
+    if candidates:
+        candidates.sort(
+            key=lambda item: (
+                item[2],
+                name_quality(item[0]),
+                -len(item[0]),
+            ),
+            reverse=True,
+        )
+        return candidates[0]
+
+    return (
+        "",
+        "unknown",
+        0,
+    )
+
+
+
+def business_identity_has_primary_brand_evidence(
+    soup: BeautifulSoup,
+    business_name: str,
+) -> bool:
+    """Return True when an identity is presented in primary brand locations.
+
+    Footer/agency mentions are deliberately excluded. A business name that only
+    appears in a site-credit area should not beat a title/header/logo identity.
+    """
+
+    needle = clean_business_name_candidate(
+        business_name
+    ).casefold()
+
+    if not needle:
+        return False
+
+    def contains_identity(value: str) -> bool:
+        cleaned = clean_business_name_candidate(
+            value
+        ).casefold()
+
+        return bool(
+            cleaned
+            and (
+                needle == cleaned
+                or needle in cleaned
+                or cleaned in needle
+            )
+        )
+
+    if soup.title and contains_identity(
+        soup.title.get_text()
+    ):
+        return True
+
+    for property_name in [
+        "og:site_name",
+        "application-name",
+    ]:
+        tag = (
+            soup.find(
+                "meta",
+                attrs={
+                    "property": property_name
+                },
+            )
+            or soup.find(
+                "meta",
+                attrs={
+                    "name": property_name
+                },
+            )
+        )
+
+        if tag and contains_identity(
+            str(tag.get("content") or "")
+        ):
+            return True
+
+    for element in soup.select(
+        "header, nav, h1, h2, "
+        "header [class*='logo'], header [class*='brand'], "
+        "nav [class*='logo'], nav [class*='brand']"
+    ):
+        if looks_like_agency_credit_element(element):
+            continue
+
+        if contains_identity(
+            element.get_text(" ", strip=True)
+        ):
+            return True
+
+        for image in element.find_all("img"):
+            for attribute_name in [
+                "alt",
+                "title",
+                "aria-label",
+            ]:
+                if contains_identity(
+                    str(
+                        image.get(
+                            attribute_name
+                        )
+                        or ""
+                    )
+                ):
+                    return True
+
+    return False
+
+
+def resolve_business_identity_conflict(
+    soup: BeautifulSoup,
+    business_name: str,
+    business_name_source: str,
+    business_name_confidence: int,
+    inferred_domain_name: str,
+    email_identity_name: str,
+    domain_name_is_valid: bool,
+    email_identity_is_valid: bool,
+) -> tuple[str, str, int]:
+    """Resolve agency/person metadata conflicts using visible site identity.
+
+    A number of SMB sites publish JSON-LD for a developer, agency, doctor, or
+    platform rather than the actual business brand. This guard only overrides
+    when visible/title identity has stronger consensus with the site's domain
+    or the structured identity is not genuinely visible outside agency credit.
+    """
+
+    visible_identity = extract_visible_business_identity_candidate(
+        soup
+    )
+    title_identity = extract_page_title_identity_candidate(
+        soup,
+        inferred_domain_name,
+    )
+
+    identity_candidates = [
+        candidate
+        for candidate in [
+            visible_identity,
+            title_identity,
+        ]
+        if candidate[0]
+    ]
+
+    def identity_consensus_score(
+        candidate: tuple[str, str, int],
+    ) -> int:
+        candidate_name, _source, confidence = candidate
+        score = int(confidence)
+
+        if (
+            domain_name_is_valid
+            and (
+                business_name_matches_domain(
+                    candidate_name,
+                    inferred_domain_name,
+                )
+                or title_identity_matches_domain(
+                    candidate_name,
+                    inferred_domain_name,
+                )
+            )
+        ):
+            score += 28
+
+        if (
+            email_identity_is_valid
+            and business_name_matches_domain(
+                candidate_name,
+                email_identity_name,
+            )
+        ):
+            score += 22
+
+        if len(candidate_name.split()) == 1:
+            score -= 14
+
+        return score
+
+    if not identity_candidates:
+        return (
+            business_name,
+            business_name_source,
+            business_name_confidence,
+        )
+
+    best_identity_candidate = max(
+        identity_candidates,
+        key=identity_consensus_score,
+    )
+
+    current_matches_domain = bool(
+        domain_name_is_valid
+        and (
+            business_name_matches_domain(
+                business_name,
+                inferred_domain_name,
+            )
+            or title_identity_matches_domain(
+                business_name,
+                inferred_domain_name,
+            )
+        )
+    )
+
+    current_has_real_visible_mention = (
+        business_identity_has_non_agency_visible_mention(
+            soup,
+            business_name,
+        )
+    )
+
+    current_has_primary_brand_evidence = (
+        business_identity_has_primary_brand_evidence(
+            soup,
+            business_name,
+        )
+    )
+
+    structured_sources = {
+        "json_ld_name",
+        "json_ld_legalName",
+        "json_ld_alternateName",
+        "json_ld_brand",
+        "json_ld_logo",
+        "meta_site_identity",
+        # page_brand can be polluted by footer phrases such as
+        # "Website by Mindstorm". Only trust it over a strong title
+        # when it has a genuine non-agency visible mention.
+        "page_brand",
+    }
+
+    candidate_name, candidate_source, candidate_confidence = (
+        best_identity_candidate
+    )
+    candidate_score = identity_consensus_score(
+        best_identity_candidate
+    )
+    candidate_matches_domain = bool(
+        domain_name_is_valid
+        and (
+            business_name_matches_domain(
+                candidate_name,
+                inferred_domain_name,
+            )
+            or title_identity_matches_domain(
+                candidate_name,
+                inferred_domain_name,
+            )
+        )
+    )
+
+    candidate_has_primary_brand_evidence = (
+        business_identity_has_primary_brand_evidence(
+            soup,
+            candidate_name,
+        )
+    )
+
+    should_override_identity = False
+
+    if (
+        candidate_matches_domain
+        and not current_matches_domain
+        and candidate_score >= 105
+    ):
+        should_override_identity = True
+
+    elif (
+        business_name_source in structured_sources
+        and not current_has_real_visible_mention
+        and candidate_score >= 88
+    ):
+        should_override_identity = True
+
+    # A footer/agency-derived page brand can sometimes look like a real
+    # visible mention even though it is not the client brand. If the current
+    # identity has no title/header/logo evidence and another candidate does,
+    # prefer the primary brand candidate. This protects against agency names
+    # such as "Mindstorm" becoming the prospect identity.
+    elif (
+        business_name_source in {
+            "page_brand",
+            "meta_site_identity",
+            "meta_application-name",
+            "meta_publisher",
+        }
+        and not current_has_primary_brand_evidence
+        and candidate_has_primary_brand_evidence
+        and candidate_score >= 86
+    ):
+        should_override_identity = True
+
+    if (
+        should_override_identity
+        and not business_names_equivalent(
+            business_name,
+            candidate_name,
+        )
+    ):
+        return (
+            candidate_name,
+            candidate_source,
+            min(
+                96,
+                max(
+                    candidate_confidence,
+                    86,
+                ),
+            ),
+        )
+
+    return (
+        business_name,
+        business_name_source,
+        business_name_confidence,
+    )
+
+
 # =========================================================
 # EMAIL DOMAIN IDENTITY
 # =========================================================
@@ -1871,6 +2975,98 @@ def extract_business_name(
             )
 
     # -----------------------------------------------------
+    # Page title identity
+    #
+    # A clean business-like title is stronger than a
+    # guessed domain token. Domain inference remains a
+    # fallback, not a replacement for explicit page identity.
+    # -----------------------------------------------------
+
+    page_title = ""
+
+    if soup.title:
+        page_title = clean_text(
+            soup.title.get_text()
+        )
+
+    if page_title:
+        title_parts: list[str] = []
+
+        for separator in [
+            " | ",
+            " - ",
+            " — ",
+            " – ",
+            " :: ",
+            ": ",
+        ]:
+            if separator in page_title:
+                title_parts.extend(
+                    clean_text(part)
+                    for part in page_title.split(separator)
+                    if clean_text(part)
+                )
+
+        # If there was no separator, evaluate the whole title.
+        if not title_parts:
+            title_parts = [page_title]
+
+        # Also evaluate the full title when it is concise. This
+        # protects names such as "VIP Air Conditioning & Heating".
+        if (
+            page_title not in title_parts
+            and len(page_title) <= 100
+        ):
+            title_parts.append(page_title)
+
+        for part in title_parts:
+            cleaned = clean_business_name_candidate(
+                part
+            )
+
+            word_count = len(
+                cleaned.split()
+            )
+
+            quality = name_quality(
+                cleaned
+            )
+
+            if (
+                2 <= len(cleaned) <= 100
+                and 1 <= word_count <= 9
+                and quality >= 45
+                and not looks_generic_business_name(
+                    cleaned
+                )
+                and not looks_like_seo_marketing_title(
+                    cleaned
+                )
+            ):
+                confidence = 86
+
+                if word_count == 1:
+                    confidence = 76
+
+                if is_likely_descriptive_business_name(
+                    cleaned
+                ):
+                    # Descriptive titles can still contain the real
+                    # business name, but keep confidence conservative.
+                    confidence = max(
+                        78,
+                        confidence - 6,
+                    )
+
+                candidates.append(
+                    (
+                        cleaned,
+                        "title_identity",
+                        confidence,
+                    )
+                )
+
+    # -----------------------------------------------------
     # Explicit visible brand mentions
     # -----------------------------------------------------
 
@@ -1878,7 +3074,7 @@ def extract_business_name(
 
     brand_patterns = [
         re.compile(
-            r"\b(?:about|welcome\s+to|at|from|by)\s+"
+            r"\b(?:about|welcome\s+to|at)\s+"
             r"([A-Z][A-Za-z0-9&.'’\-]*(?:\s+[A-Z][A-Za-z0-9&.'’\-]*){0,4})"
             r"(?=\s+(?:is|was|offers|provides|specializes|delivers|we\b)|[,.!?]|$)",
             re.I,
@@ -1913,6 +3109,11 @@ def extract_business_name(
             continue
 
         if len(element_text) > 220:
+            continue
+
+        if looks_like_agency_credit_element(
+            element
+        ):
             continue
 
         for pattern in brand_patterns:
@@ -2394,6 +3595,11 @@ def extract_business_name(
                     )
                     else 0
                 )
+                + (
+                    5
+                    if item[1] == "title_identity"
+                    else 0
+                )
                 - (
                     20
                     if item[1] == "image_brand"
@@ -2428,6 +3634,7 @@ def extract_business_name(
             " — ",
             " – ",
             " :: ",
+            ": ",
         ]
 
         title_candidates: list[
@@ -2506,30 +3713,37 @@ def extract_business_name(
 def get_phone_country(
     phone: str,
 ) -> Optional[str]:
+    """Infer a country only from an explicit international phone prefix.
+
+    Bare local numbers such as 404..., 704..., or 817... must never be
+    interpreted as Romania (+40), Russia (+7), or another country merely
+    because their first digits resemble a dial code.
+    """
+
+    value = clean_text(
+        str(phone or "")
+    ).strip()
+
+    if not value:
+        return None
+
+    explicit_plus = value.startswith("+")
+    explicit_00 = value.startswith("00")
+
+    if not (explicit_plus or explicit_00):
+        return None
 
     digits = re.sub(
         r"\D",
         "",
-        phone,
+        value,
     )
+
+    if explicit_00 and digits.startswith("00"):
+        digits = digits[2:]
 
     if not digits:
         return None
-
-    # Strong Indian mobile evidence.
-    if (
-        len(digits) == 12
-        and digits.startswith("91")
-    ):
-
-        local = digits[2:]
-
-        if (
-            len(local) == 10
-            and local[0] in "6789"
-        ):
-
-            return "IN"
 
     unique_codes = sorted(
         set(
@@ -2541,9 +3755,7 @@ def get_phone_country(
 
     for code in unique_codes:
 
-        if digits.startswith(
-            code
-        ):
+        if digits.startswith(code):
 
             matches = [
                 country
@@ -2582,6 +3794,22 @@ def is_plausible_phone_for_country(
         )
     ):
         return False
+
+    if country_hint in {"US", "CA"}:
+
+        local = digits
+
+        if len(local) == 11 and local.startswith("1"):
+            local = local[1:]
+
+        if len(local) != 10:
+            return False
+
+        # NANP area/exchange codes do not begin with 0 or 1.
+        return (
+            local[0] in "23456789"
+            and local[3] in "23456789"
+        )
 
     if country_hint == "IN":
 
@@ -2674,12 +3902,22 @@ def normalize_phone_for_country(
     has_plus = value.startswith(
         "+"
     )
+    has_00_prefix = value.startswith(
+        "00"
+    )
 
-    if has_plus:
+    if has_plus or has_00_prefix:
+
+        international_digits = digits
+
+        if has_00_prefix and international_digits.startswith("00"):
+            international_digits = international_digits[2:]
 
         detected_country = get_phone_country(
-            digits
+            f"+{international_digits}"
         )
+
+        digits = international_digits
 
         if country_hint == "IN":
 
@@ -2793,10 +4031,59 @@ def normalize_phone_for_country(
                     f"+{international}"
                 )
 
-    if 8 <= len(digits) <= 15:
+    # Without a country hint or explicit international prefix, keep only
+    # plausible local-length numbers. Long bare digit strings are commonly
+    # tracking IDs or a phone number accidentally merged with an address.
+    if 7 <= len(digits) <= 11:
         return digits
 
     return None
+
+
+def revalidate_phone_list_for_country(
+    phones: list[str],
+    country_hint: Optional[str],
+) -> list[str]:
+    """Remove numeric noise once strong locale evidence is available.
+
+    US/CA/IN formats have strict enough rules to safely revalidate after the
+    locale pass. Other countries retain the existing conservative behavior.
+    """
+
+    if country_hint not in {"US", "CA", "IN"}:
+        return phones[:8]
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+
+    for phone in phones:
+        normalized = normalize_phone_for_country(
+            phone,
+            country_hint,
+        )
+
+        if not normalized:
+            continue
+
+        digits = re.sub(
+            r"\D",
+            "",
+            normalized,
+        )
+
+        if not is_plausible_phone_for_country(
+            digits,
+            country_hint,
+        ):
+            continue
+
+        if digits in seen:
+            continue
+
+        cleaned.append(normalized)
+        seen.add(digits)
+
+    return cleaned[:8]
 
 
 # =========================================================
@@ -2810,19 +4097,34 @@ def extract_explicit_india_phones(
     phones: list[str] = []
     seen: set[str] = set()
 
-    # First: explicit +91 numbers.
+    # First: explicit +91 numbers. Require nearby contact semantics so
+    # technical/script data containing +91-like digit runs cannot force an
+    # otherwise US/UK/etc. site to India.
     for pattern in [
         INDIA_PHONE_REGEX,
-        INDIA_PHONE_WITHOUT_PLUS_REGEX,
     ]:
 
-        for match in pattern.findall(
+        for match in pattern.finditer(
             html_content
         ):
 
             candidate = clean_text(
-                match
+                match.group(0)
             )
+
+            context = html_lib.unescape(
+                html_content[
+                    max(0, match.start() - 140):
+                    min(len(html_content), match.end() + 140)
+                ]
+            ).lower()
+
+            if not re.search(
+                r"(?:tel:|phone|mobile|telephone|call|whatsapp|contact)",
+                context,
+                re.I,
+            ):
+                continue
 
             normalized = normalize_phone_for_country(
                 candidate,
@@ -3096,6 +4398,39 @@ def extract_phone_numbers(
 # CONTACTS
 # =========================================================
 
+def is_platform_social_url(
+    url: str,
+) -> bool:
+    """Reject known website-platform social accounts from prospect socials."""
+
+    value = clean_text(url).lower()
+
+    if not value:
+        return True
+
+    try:
+        parsed = urllib.parse.urlparse(
+            value
+            if "://" in value
+            else f"https://{value.lstrip('/')}"
+        )
+        host = parsed.netloc.lower().removeprefix("www.")
+        path = parsed.path.lower().rstrip("/")
+    except Exception:
+        return False
+
+    known_platform_accounts = {
+        ("linkedin.com", "/company/wix-com"),
+        ("linkedin.com", "/company/wix"),
+        ("instagram.com", "/wixstudio"),
+        ("instagram.com", "/wix"),
+        ("facebook.com", "/wixstudio"),
+        ("facebook.com", "/wix"),
+    }
+
+    return (host, path) in known_platform_accounts
+
+
 def extract_contacts(
     soup: BeautifulSoup,
     html_content: str = "",
@@ -3126,6 +4461,16 @@ def extract_contacts(
         )
 
         href = original_href.lower()
+
+        if (
+            looks_like_agency_credit_element(
+                anchor
+            )
+            or is_platform_social_url(
+                original_href
+            )
+        ):
+            continue
 
         if (
             "linkedin.com/company" in href
@@ -3172,6 +4517,102 @@ def extract_contacts(
 # EMAILS
 # =========================================================
 
+def is_technical_email_address(
+    email: str,
+) -> bool:
+
+    clean = clean_text(
+        email
+    ).lower()
+
+    if "@" not in clean:
+        return True
+
+    local_part, email_domain = clean.rsplit(
+        "@",
+        1,
+    )
+
+    if any(
+        email_domain == suffix
+        or email_domain.endswith(
+            f".{suffix}"
+        )
+        for suffix in TECHNICAL_EMAIL_DOMAIN_SUFFIXES
+    ):
+        return True
+
+    # Sentry/Wix telemetry commonly uses long hexadecimal local parts.
+    if (
+        len(local_part) >= 20
+        and re.fullmatch(
+            r"[a-f0-9]+",
+            local_part,
+        )
+    ):
+        return True
+
+    return False
+
+
+def is_likely_vendor_email_address(
+    email: str,
+    site_domain: str,
+) -> bool:
+    """Reject obvious third-party website/platform support addresses.
+
+    Only mismatched domains are considered. This keeps legitimate same-domain
+    support@ addresses usable while preventing website-vendor contacts from
+    becoming the preferred prospect email.
+    """
+
+    clean = clean_text(email).lower()
+    site_domain = clean_text(site_domain).lower().removeprefix("www.")
+
+    if "@" not in clean:
+        return True
+
+    local_part, email_domain = clean.rsplit("@", 1)
+
+    if (
+        site_domain
+        and (
+            email_domain == site_domain
+            or email_domain.endswith(f".{site_domain}")
+        )
+    ):
+        return False
+
+    vendor_domain_hints = (
+        "website",
+        "websites",
+        "webdesign",
+        "web-design",
+        "sitebuilder",
+        "site-builder",
+        "hosting",
+        "webhost",
+        "web-host",
+        "webmaster",
+    )
+
+    vendor_local_parts = {
+        "support",
+        "webmaster",
+        "accessibility",
+        "privacy",
+        "help",
+    }
+
+    return bool(
+        local_part in vendor_local_parts
+        and any(
+            hint in email_domain
+            for hint in vendor_domain_hints
+        )
+    )
+
+
 def extract_emails(
     html_content: str,
 ) -> list[str]:
@@ -3216,6 +4657,7 @@ def extract_emails(
             local_part in PLACEHOLDER_EMAIL_LOCAL_PARTS
             or email_domain in PLACEHOLDER_EMAIL_DOMAINS
             or local_part in NON_CONTACT_EMAIL_LOCAL_PARTS
+            or is_technical_email_address(clean)
         ):
             continue
 
@@ -3264,6 +4706,7 @@ def score_email_for_outreach(
         local_part in PLACEHOLDER_EMAIL_LOCAL_PARTS
         or email_domain in PLACEHOLDER_EMAIL_DOMAINS
         or local_part in NON_CONTACT_EMAIL_LOCAL_PARTS
+        or is_technical_email_address(clean)
     )
 
     same_domain = bool(
@@ -3284,7 +4727,12 @@ def score_email_for_outreach(
         email_domain in FREE_EMAIL_DOMAINS
     )
 
-    if placeholder:
+    vendor_like = is_likely_vendor_email_address(
+        clean,
+        site_domain,
+    )
+
+    if placeholder or vendor_like:
         score = 0
     else:
         score = 35
@@ -3315,6 +4763,7 @@ def score_email_for_outreach(
         "same_domain": same_domain,
         "role_address": role_address,
         "free_provider": free_provider,
+        "vendor_like": vendor_like,
         "usable": score >= 30,
     }
 
@@ -3325,6 +4774,7 @@ def build_contactability_signals(
     phones: list[str],
     socials: dict,
     conversion_signals: dict,
+    conversion_evidence: Optional[dict] = None,
 ) -> dict:
 
     site_domain = get_domain(
@@ -3413,7 +4863,62 @@ def build_contactability_signals(
         ),
     )
 
-    if score >= 60:
+    static_score = score
+
+    has_static_contact_route = bool(
+        preferred_email
+        or phones
+        or conversion_signals.get(
+            "has_form"
+        )
+        or conversion_signals.get(
+            "has_mailto"
+        )
+        or conversion_signals.get(
+            "has_tel_link"
+        )
+        or conversion_signals.get(
+            "has_whatsapp"
+        )
+    )
+
+    evidence = (
+        conversion_evidence
+        if isinstance(
+            conversion_evidence,
+            dict,
+        )
+        else {}
+    )
+
+    unverified_missing = set(
+        evidence.get(
+            "unverified_missing",
+            [],
+        )
+        or []
+    )
+
+    contact_path_unverified = (
+        "contact_path"
+        in unverified_missing
+    )
+
+    verification_required = (
+        not has_static_contact_route
+        or contact_path_unverified
+    )
+
+    # A low static score plus an unverified rendered contact path means
+    # "not confirmed", not "this business is unreachable". Keep a neutral
+    # baseline until a rendered browser check confirms absence.
+    if verification_required:
+        score = max(
+            score,
+            35,
+        )
+        level = "UNVERIFIED"
+    elif score >= 60:
         level = "HIGH"
     elif score >= 35:
         level = "MEDIUM"
@@ -3449,14 +4954,21 @@ def build_contactability_signals(
             "Website contact form detected"
         )
 
+    if contact_path_unverified:
+        reasons.append(
+            "Contact path is not confirmed in fetched HTML; rendered verification required"
+        )
+
     if not reasons:
         reasons.append(
-            "No reliable contact route detected"
+            "No reliable static contact route confirmed; rendered verification required"
         )
 
     return {
         "score": score,
+        "static_score": static_score,
         "level": level,
+        "verification_required": verification_required,
         "preferred_email": preferred_email or None,
         "email_ready": bool(preferred_email),
         "email_profiles": email_profiles[:8],
@@ -3719,6 +5231,102 @@ def extract_conversion_signals(
         "has_cta": has_cta,
         "has_conversion_link": has_conversion_link,
         "cta_examples": cta_examples,
+    }
+
+
+def build_conversion_evidence(
+    conversion_signals: dict,
+    emails: list[str],
+    phones: list[str],
+) -> dict:
+    """Classify conversion findings by evidence quality.
+
+    Positive findings in fetched HTML are confirmed. Negative findings
+    for CTA/form/contact/booking are not treated as confirmed defects,
+    because JavaScript-rendered widgets can be invisible to HTTP parsing.
+    """
+
+    has_contact_path = (
+        bool(phones)
+        or bool(emails)
+        or bool(
+            conversion_signals.get(
+                "has_tel_link"
+            )
+        )
+        or bool(
+            conversion_signals.get(
+                "has_mailto"
+            )
+        )
+        or bool(
+            conversion_signals.get(
+                "has_whatsapp"
+            )
+        )
+    )
+
+    has_booking_path = (
+        bool(
+            conversion_signals.get(
+                "has_conversion_link"
+            )
+        )
+        or bool(
+            conversion_signals.get(
+                "has_booking"
+            )
+        )
+    )
+
+    checks = {
+        "cta": bool(
+            conversion_signals.get(
+                "has_cta"
+            )
+        ),
+        "form": bool(
+            conversion_signals.get(
+                "has_form"
+            )
+        ),
+        "contact_path": has_contact_path,
+        "booking_path": has_booking_path,
+    }
+
+    confirmed_present = [
+        key
+        for key, present in checks.items()
+        if present
+    ]
+
+    unverified_missing = [
+        key
+        for key, present in checks.items()
+        if not present
+    ]
+
+    status = (
+        "CONFIRMED_PRESENT"
+        if not unverified_missing
+        else "RENDER_VERIFY"
+    )
+
+    return {
+        "status": status,
+        "confirmed_present": confirmed_present,
+        "unverified_missing": unverified_missing,
+        "render_verification_required": bool(
+            unverified_missing
+        ),
+        "has_contact_path": has_contact_path,
+        "has_booking_path": has_booking_path,
+        "note": (
+            "Missing CTA/form/contact/booking signals are unverified "
+            "until the page is checked after JavaScript rendering."
+            if unverified_missing
+            else "Core conversion paths were confirmed in fetched HTML."
+        ),
     }
 
 
@@ -4076,6 +5684,59 @@ def detect_india_location_score(
     )
 
 
+def detect_us_location_score(
+    text: str,
+) -> int:
+    """Return strong US address evidence without guessing from phone digits."""
+
+    normalized = clean_text(
+        text
+    )
+
+    if not normalized:
+        return 0
+
+    score = 0
+
+    state_pattern = "|".join(
+        sorted(
+            US_STATE_ABBREVIATIONS
+        )
+    )
+
+    # Strong: state abbreviation immediately followed by a ZIP code.
+    if re.search(
+        rf"\b(?:{state_pattern})\s+\d{{5}}(?:-\d{{4}})?\b",
+        normalized,
+        re.I,
+    ):
+        score += 3
+
+    # Strong: city-style comma + state abbreviation.
+    if re.search(
+        rf",\s*(?:{state_pattern})(?:\s+\d{{5}}(?:-\d{{4}})?)?\b",
+        normalized,
+        re.I,
+    ):
+        score += 2
+
+    lowered = normalized.lower()
+
+    if any(
+        re.search(
+            rf"\b{re.escape(state_name)}\b",
+            lowered,
+        )
+        for state_name in US_STATE_NAMES
+    ):
+        score += 1
+
+    return min(
+        4,
+        score,
+    )
+
+
 def detect_locale_signals(
     soup: BeautifulSoup,
     url: str,
@@ -4262,26 +5923,8 @@ def detect_locale_signals(
                 str(phone),
             )
 
-            if (
-                len(digits) == 12
-                and digits.startswith("91")
-            ):
-
-                local = digits[2:]
-
-                if (
-                    len(local) == 10
-                    and local[0] in "6789"
-                ):
-
-                    phone_countries.append(
-                        "IN"
-                    )
-
-                    continue
-
             country = get_phone_country(
-                phone
+                str(phone)
             )
 
             if country:
@@ -4290,23 +5933,16 @@ def detect_locale_signals(
                     country
                 )
 
-    # Explicit +91 source-level evidence.
-    html_india_phone_matches = []
-
-    if html_content:
-
-        html_india_phone_matches.extend(
-            INDIA_PHONE_REGEX.findall(
-                html_content
-            )
+    # Explicit +91 source-level evidence only. Use the same validated
+    # contact-context extractor as phone parsing; raw script digits are not
+    # country evidence.
+    html_india_phone_matches = (
+        extract_explicit_india_phones(
+            html_content
         )
-
-        html_india_phone_matches.extend(
-            INDIA_PHONE_WITHOUT_PLUS_REGEX.findall(
-                html_content
-            )
-
-        )
+        if html_content
+        else []
+    )
 
     if html_india_phone_matches:
 
@@ -4391,6 +6027,22 @@ def detect_locale_signals(
             + (
                 15
                 * india_location_score
+            )
+        )
+
+    us_location_score = detect_us_location_score(
+        combined_country_text[:70000]
+    )
+
+    if us_location_score:
+        evidence["US"] = (
+            evidence.get(
+                "US",
+                0,
+            )
+            + (
+                30
+                * us_location_score
             )
         )
 
@@ -4584,6 +6236,8 @@ def detect_locale_signals(
         "language_country_confidence": (
             language_country_confidence
         ),
+        "us_location_score": us_location_score,
+        "india_location_score": india_location_score,
     }
 
     return {
@@ -4864,6 +6518,11 @@ def generate_sales_intel(
         {},
     )
 
+    conversion_evidence = data.get(
+        "conversion_evidence",
+        {},
+    )
+
     technical = data.get(
         "technical_signals",
         {},
@@ -5005,31 +6664,21 @@ def generate_sales_intel(
 
     conversion_score = 40
 
-    has_contact_path = (
-        bool(
-            data.get(
-                "phones"
-            )
+    has_contact_path = bool(
+        conversion_evidence.get(
+            "has_contact_path"
         )
-        or bool(
-            data.get(
-                "emails"
-            )
+    )
+
+    has_booking_path = bool(
+        conversion_evidence.get(
+            "has_booking_path"
         )
-        or bool(
-            conversion.get(
-                "has_tel_link"
-            )
-        )
-        or bool(
-            conversion.get(
-                "has_mailto"
-            )
-        )
-        or bool(
-            conversion.get(
-                "has_whatsapp"
-            )
+    )
+
+    render_verification_required = bool(
+        conversion_evidence.get(
+            "render_verification_required"
         )
     )
 
@@ -5037,43 +6686,36 @@ def generate_sales_intel(
         "has_cta"
     ):
 
-        conversion_score -= 12
+        conversion_score -= 3
 
         problems.append(
-            "No clear conversion CTA"
+            "CTA not confirmed in fetched HTML — render verification required"
         )
 
     if not conversion.get(
         "has_form"
     ):
 
-        conversion_score -= 10
+        conversion_score -= 3
 
         problems.append(
-            "No lead capture form"
+            "Form not confirmed in fetched HTML — render verification required"
         )
 
     if not has_contact_path:
 
-        conversion_score -= 10
+        conversion_score -= 2
 
         problems.append(
-            "No obvious contact path"
+            "Contact path not confirmed in fetched HTML — render verification required"
         )
 
-    if (
-        not conversion.get(
-            "has_conversion_link"
-        )
-        and not conversion.get(
-            "has_booking"
-        )
-    ):
+    if not has_booking_path:
 
-        conversion_score -= 5
+        conversion_score -= 2
 
         problems.append(
-            "No clear enquiry or booking path"
+            "Enquiry/booking path not confirmed in fetched HTML — render verification required"
         )
 
     conversion_score = max(
@@ -5218,59 +6860,52 @@ def generate_sales_intel(
         "has_cta"
     ):
 
-        opportunity_score += 12
+        opportunity_score += 3
 
         opportunity_reasons.append(
-            "No clear conversion CTA"
+            "CTA not confirmed in fetched HTML"
         )
 
         recommendations.append(
-            "Add a strong primary CTA for the main customer action"
+            "Verify the rendered CTA before treating this as a redesign gap"
         )
 
     if not conversion.get(
         "has_form"
     ):
 
-        opportunity_score += 16
+        opportunity_score += 4
 
         opportunity_reasons.append(
-            "No lead capture form"
+            "Form not confirmed in fetched HTML"
         )
 
         recommendations.append(
-            "Add an enquiry or lead form"
+            "Verify forms or booking widgets after JavaScript renders"
         )
 
     if not has_contact_path:
 
-        opportunity_score += 9
+        opportunity_score += 2
 
         opportunity_reasons.append(
-            "Weak contact accessibility"
+            "Contact route not confirmed in fetched HTML"
         )
 
         recommendations.append(
-            "Make phone, email, WhatsApp or enquiry options more prominent"
+            "Verify phone, email and contact widgets in a rendered browser"
         )
 
-    if (
-        not conversion.get(
-            "has_conversion_link"
-        )
-        and not conversion.get(
-            "has_booking"
-        )
-    ):
+    if not has_booking_path:
 
-        opportunity_score += 7
+        opportunity_score += 2
 
         opportunity_reasons.append(
-            "No clear enquiry or booking path"
+            "Enquiry/booking path not confirmed in fetched HTML"
         )
 
         recommendations.append(
-            "Create a dedicated enquiry, booking or quote path"
+            "Verify the rendered enquiry or booking path before recommending a rebuild"
         )
 
     if not meta_description:
@@ -5457,7 +7092,12 @@ def generate_sales_intel(
     # does not masquerade as website quality.
     if contactability_score >= 70:
         opportunity_score += 3
-    elif contactability_score < 20:
+    elif (
+        contactability_score < 20
+        and not contactability.get(
+            "verification_required"
+        )
+    ):
         opportunity_score -= 5
 
     opportunity_score = max(
@@ -5484,30 +7124,11 @@ def generate_sales_intel(
     # BEST SALES ANGLE
     # =====================================================
 
-    if (
-        not conversion.get(
-            "has_form"
-        )
-        and not conversion.get(
-            "has_cta"
-        )
-    ):
+    if render_verification_required:
 
         best_sales_angle = (
-            "Lead-generation redesign: make it easier "
-            "for visitors to enquire."
-        )
-
-    elif (
-        commercial_intent == "HIGH"
-        and not conversion.get(
-            "has_form"
-        )
-    ):
-
-        best_sales_angle = (
-            "High-intent commercial website with "
-            "an obvious missed enquiry opportunity."
+            "Verify the rendered customer journey first, then pitch only confirmed "
+            "conversion or presentation gaps."
         )
 
     elif not meta_description or h1_count == 0:
@@ -5594,8 +7215,19 @@ def generate_sales_intel(
         prospect_score >= 60
         and preferred_email
         and opportunity_score >= 40
+        and not contactability.get(
+            "verification_required"
+        )
     ):
         prospect_decision = "CONTACT"
+    elif (
+        contactability.get(
+            "verification_required"
+        )
+        and opportunity_score >= 35
+        and business_name_confidence >= 60
+    ):
+        prospect_decision = "VERIFY"
     elif (
         prospect_score >= 45
         and opportunity_score >= 35
@@ -5648,6 +7280,13 @@ def generate_sales_intel(
             "Verify forms or booking widgets after JavaScript renders"
         )
 
+    if contactability.get(
+        "verification_required"
+    ):
+        manual_verification.append(
+            "Verify public phone/email/contact routes in a rendered browser"
+        )
+
     if business_name_confidence < 75:
         manual_verification.append(
             "Verify business identity against the live site"
@@ -5658,19 +7297,21 @@ def generate_sales_intel(
     # =====================================================
 
     has_major_conversion_gap = (
-        not conversion.get(
-            "has_form"
-        )
-        or not conversion.get(
-            "has_cta"
-        )
-        or (
+        not render_verification_required
+        and (
             not conversion.get(
-                "has_conversion_link"
+                "has_form"
             )
-            and not conversion.get(
-                "has_booking"
+            or not conversion.get(
+                "has_cta"
             )
+            or not has_booking_path
+        )
+    )
+
+    potential_conversion_gap = bool(
+        conversion_evidence.get(
+            "unverified_missing"
         )
     )
 
@@ -5893,7 +7534,7 @@ def generate_sales_intel(
 
     pitch = (
         f"Hi, I was reviewing "
-        f"{outreach_business_name}'s website "
+        f"the {outreach_business_name} website "
         f"and noticed {pitch_reason}. "
         f"I found a few areas where the customer journey "
         f"could be clearer and easier for potential customers "
@@ -5911,6 +7552,8 @@ def generate_sales_intel(
         "seo_score": seo_score,
         "conversion_score": conversion_score,
         "technical_score": technical_score,
+        "conversion_evidence": conversion_evidence,
+        "potential_conversion_gap": potential_conversion_gap,
 
         "opportunity_score": opportunity_score,
         "opportunity_level": opportunity_level,
@@ -5981,21 +7624,25 @@ async def process_single_url(
     raw_url: str,
 ) -> Optional[dict]:
 
-    target_url = normalize_url(
+    input_url = clean_text(
         raw_url
+    )
+
+    target_url = normalize_url(
+        input_url
     )
 
     if not target_url:
         return None
 
+    attempted_urls: list[str] = []
+
     try:
 
-        response = await client.get(
-            target_url,
-            headers=HEADERS,
+        response, attempted_urls = await fetch_url_with_fallback(
+            client,
+            input_url,
         )
-
-        response.raise_for_status()
 
         html_content = response.text
         html_lower = html_content.lower()
@@ -6117,6 +7764,13 @@ async def process_single_url(
         inferred_domain_name = (
             infer_business_name_from_domain(
                 final_url
+            )
+        )
+
+        title_identity_name, title_identity_source, title_identity_confidence = (
+            extract_page_title_identity_candidate(
+                soup,
+                inferred_domain_name,
             )
         )
 
@@ -6308,6 +7962,9 @@ async def process_single_url(
             or looks_generic_business_name(
                 business_name
             )
+            or looks_like_non_brand_phrase(
+                business_name
+            )
         )
 
         current_name_is_descriptive = (
@@ -6318,13 +7975,28 @@ async def process_single_url(
             else True
         )
 
+        current_name_word_count = len(
+            clean_business_name_candidate(
+                business_name
+            ).split()
+        )
+
         current_name_is_suspicious = (
             current_name_is_invalid
-            or len(
-                clean_business_name_candidate(
-                    business_name
-                ).split()
-            ) > 5
+            or looks_like_non_brand_phrase(
+                business_name
+            )
+            or current_name_word_count > 5
+        )
+
+        title_identity_is_valid = (
+            bool(title_identity_name)
+            and not looks_generic_business_name(
+                title_identity_name
+            )
+            and not looks_like_non_brand_phrase(
+                title_identity_name
+            )
         )
 
         domain_name_is_valid = (
@@ -6371,7 +8043,22 @@ async def process_single_url(
 
         if current_name_is_invalid:
 
-            if email_identity_is_valid:
+            if title_identity_is_valid:
+
+                business_name = (
+                    title_identity_name
+                )
+
+                business_name_source = (
+                    title_identity_source
+                )
+
+                business_name_confidence = max(
+                    86,
+                    int(title_identity_confidence),
+                )
+
+            elif email_identity_is_valid:
 
                 business_name = (
                     email_identity_name
@@ -6396,12 +8083,69 @@ async def process_single_url(
                 business_name_confidence = 75
 
         # -------------------------------------------------
+        # A one-word location/UI identity should lose to a stronger title
+        # brand when the title is domain-aligned or shown in primary brand
+        # positions. This catches values such as a city name without hardcoding
+        # particular cities.
+        # -------------------------------------------------
+
+        if (
+            not current_name_is_invalid
+            and current_name_word_count == 1
+            and title_identity_is_valid
+            and not business_names_equivalent(
+                business_name,
+                title_identity_name,
+            )
+            and (
+                (
+                    domain_name_is_valid
+                    and title_identity_matches_domain(
+                        title_identity_name,
+                        inferred_domain_name,
+                    )
+                )
+                or business_identity_has_primary_brand_evidence(
+                    soup,
+                    title_identity_name,
+                )
+            )
+        ):
+            business_name = title_identity_name
+            business_name_source = title_identity_source
+            business_name_confidence = max(
+                86,
+                int(title_identity_confidence),
+            )
+            current_name_is_descriptive = (
+                is_likely_descriptive_business_name(
+                    business_name
+                )
+            )
+
+        # -------------------------------------------------
         # Descriptive page names lose to an actual domain
         # identity unless structured data provides a strong
         # explicit business/brand name.
         # -------------------------------------------------
 
         elif current_name_is_descriptive:
+
+            title_domain_match = (
+                business_name_source == "title_identity"
+                and (
+                    not looks_like_seo_marketing_title(
+                        business_name
+                    )
+                    or (
+                        domain_name_is_valid
+                        and title_identity_matches_domain(
+                            business_name,
+                            inferred_domain_name,
+                        )
+                    )
+                )
+            )
 
             if (
                 business_name_source
@@ -6410,7 +8154,10 @@ async def process_single_url(
                     "json_ld_legalName",
                     "json_ld_alternateName",
                     "json_ld_brand",
+                    "logo_or_brand",
+                    "page_brand",
                 }
+                and not title_domain_match
             ):
 
                 if domain_name_is_valid:
@@ -6506,9 +8253,21 @@ async def process_single_url(
             or looks_generic_business_name(
                 business_name
             )
+            or looks_like_non_brand_phrase(
+                business_name
+            )
         ):
 
-            if domain_name_is_valid:
+            if title_identity_is_valid:
+
+                business_name = title_identity_name
+                business_name_source = title_identity_source
+                business_name_confidence = max(
+                    86,
+                    int(title_identity_confidence),
+                )
+
+            elif domain_name_is_valid:
 
                 business_name = (
                     inferred_domain_name
@@ -6531,6 +8290,25 @@ async def process_single_url(
                 )
 
                 business_name_confidence = 74
+
+        # -------------------------------------------------
+        # Identity conflict guard
+        # -------------------------------------------------
+
+        (
+            business_name,
+            business_name_source,
+            business_name_confidence,
+        ) = resolve_business_identity_conflict(
+            soup,
+            business_name,
+            business_name_source,
+            business_name_confidence,
+            inferred_domain_name,
+            email_identity_name,
+            domain_name_is_valid,
+            email_identity_is_valid,
+        )
 
         # -------------------------------------------------
         # Locale first pass
@@ -6714,6 +8492,24 @@ async def process_single_url(
             html_content,
         )
 
+        final_country_hint = locale_signals.get(
+            "country_hint"
+        )
+
+        revalidated_phones = revalidate_phone_list_for_country(
+            phones,
+            final_country_hint,
+        )
+
+        if revalidated_phones != phones:
+            phones = revalidated_phones
+            locale_signals = detect_locale_signals(
+                soup,
+                final_url,
+                phones,
+                html_content,
+            )
+
         # -------------------------------------------------
         # Other signals
         # -------------------------------------------------
@@ -6730,6 +8526,14 @@ async def process_single_url(
             extract_conversion_signals(
                 soup,
                 html_lower,
+            )
+        )
+
+        conversion_evidence = (
+            build_conversion_evidence(
+                conversion_signals,
+                emails,
+                phones,
             )
         )
 
@@ -6755,6 +8559,7 @@ async def process_single_url(
                 phones,
                 socials,
                 conversion_signals,
+                conversion_evidence,
             )
         )
 
@@ -6770,7 +8575,10 @@ async def process_single_url(
         # -------------------------------------------------
 
         raw_data = {
+            "input_url": input_url,
+            "resolved_url": final_url,
             "url": final_url,
+            "attempted_urls": attempted_urls,
             "domain": get_domain(
                 final_url
             ),
@@ -6802,6 +8610,10 @@ async def process_single_url(
 
             "conversion_signals": (
                 conversion_signals
+            ),
+
+            "conversion_evidence": (
+                conversion_evidence
             ),
 
             "technical_signals": (
@@ -6838,7 +8650,10 @@ async def process_single_url(
     except Exception as exc:
 
         return {
+            "input_url": input_url,
+            "resolved_url": "",
             "url": target_url,
+            "attempted_urls": attempted_urls,
             "status": "Failed",
             "error": str(exc),
         }
@@ -6857,7 +8672,8 @@ async def scan_target(
 ):
 
     async with httpx.AsyncClient(
-        timeout=25.0,
+        timeout=build_http_timeout(),
+        limits=build_http_limits(),
         follow_redirects=True,
     ) as client:
 
@@ -6898,11 +8714,24 @@ async def bulk_scan_targets(
     ),
 ):
 
-    cleaned_urls = [
-        normalize_url(url)
-        for url in urls[:50]
-        if url and url.strip()
-    ]
+    cleaned_urls: list[str] = []
+    seen_url_keys: set[str] = set()
+
+    for url in urls[:50]:
+        value = clean_text(url)
+
+        if not value:
+            continue
+
+        dedupe_key = canonical_url_key(value)
+
+        if dedupe_key and dedupe_key in seen_url_keys:
+            continue
+
+        if dedupe_key:
+            seen_url_keys.add(dedupe_key)
+
+        cleaned_urls.append(value)
 
     if not cleaned_urls:
 
@@ -6911,11 +8740,12 @@ async def bulk_scan_targets(
         }
 
     semaphore = asyncio.Semaphore(
-        8
+        BULK_SCAN_CONCURRENCY
     )
 
     async with httpx.AsyncClient(
-        timeout=25.0,
+        timeout=build_http_timeout(),
+        limits=build_http_limits(),
         follow_redirects=True,
     ) as client:
 
@@ -7788,7 +9618,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.2.0",
+        "version": "6.5.5",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
