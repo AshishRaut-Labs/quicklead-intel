@@ -1,4 +1,4 @@
-# QuickLead Intel V6.5.5 - Bulk Network Reliability
+# QuickLead Intel V6.5.6 - Identity Hygiene
 
 import asyncio
 import html as html_lib
@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.5.5",
+    version="6.5.6",
 )
 
 app.add_middleware(
@@ -404,6 +404,7 @@ BUSINESS_NAME_NOISE = {
 # Words which are frequently picked up from ordinary
 # English sentences, image alt text or CTA copy.
 INVALID_STANDALONE_NAME_WORDS = {
+    "javascript",
     "it",
     "this",
     "that",
@@ -1189,6 +1190,65 @@ def looks_like_non_brand_phrase(
     lowered = raw.casefold()
 
     if not lowered:
+        return True
+
+    # Generic product/category labels are not reliable company identities.
+    generic_category_words = {
+        "website",
+        "web",
+        "site",
+        "builder",
+        "scanner",
+        "checker",
+        "tool",
+        "tools",
+        "generator",
+        "platform",
+        "software",
+        "service",
+        "services",
+        "solution",
+        "solutions",
+    }
+
+    phrase_words = re.findall(
+        r"[a-z0-9]+",
+        lowered,
+    )
+
+    if (
+        1 <= len(phrase_words) <= 4
+        and all(
+            word in generic_category_words
+            for word in phrase_words
+        )
+    ):
+        return True
+
+    # Marketing/product titles are descriptions, not company identities.
+    if (
+        re.match(
+            r"^(?:free|online|best|top|leading)\b",
+            lowered,
+        )
+        and re.search(
+            r"\b(?:scanner|checker|tool|generator|builder|platform|"
+            r"software|service|services|website|websites)\b",
+            lowered,
+        )
+    ):
+        return True
+
+    # Multiple sentence-like fragments usually indicate a title + slogan,
+    # not a clean business name.
+    sentence_breaks = len(
+        re.findall(
+            r"[!?](?:\s|$)|\.(?:\s|$)",
+            raw,
+        )
+    )
+
+    if sentence_breaks >= 2:
         return True
 
     # Navigation / content labels such as "Our team" or "Our Yelp profile".
@@ -9618,7 +9678,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.5.5",
+        "version": "6.5.6",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
