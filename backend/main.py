@@ -1,8 +1,9 @@
-# QuickLead Intel V6.5.6 - Identity Hygiene
+# QuickLead Intel V6.6.0 - Buyer Ready
 
 import asyncio
 import html as html_lib
 import json
+import os
 import re
 import urllib.parse
 from typing import Optional
@@ -19,12 +20,21 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.5.6",
+    version="6.6.0",
 )
+
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "QUICKLEAD_CORS_ORIGINS",
+        "*",
+    ).split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins or ["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -87,6 +97,23 @@ def describe_http_error(exc: Exception) -> str:
         current = current.__cause__ or current.__context__
 
     return " <- ".join(parts)
+
+
+class WebsiteFetchError(RuntimeError):
+    """Network/access failure with a buyer-friendly classification."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_type: str = "FETCH_FAILED",
+        status: str = "Failed",
+        diagnostic: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.failure_type = failure_type
+        self.status = status
+        self.diagnostic = diagnostic
 
 
 # =========================================================
@@ -351,6 +378,8 @@ BUSINESS_SCHEMA_TYPES = {
 GENERIC_NAME_PATTERNS = {
     "home",
     "homepage",
+    "home page",
+    "landing page",
     "welcome",
     "welcome to",
     "official website",
@@ -518,6 +547,13 @@ DESCRIPTIVE_NAME_WORDS = {
     "clinic",
     "dental",
     "dentist",
+    "dentistry",
+    "cpa",
+    "accountant",
+    "accounting",
+    "hvac",
+    "plumbing",
+    "roofing",
     "restaurant",
     "hotel",
     "real estate",
@@ -1070,6 +1106,8 @@ async def fetch_url_with_fallback(
 
     attempts: list[str] = []
     failures: list[str] = []
+    status_counts: dict[int, int] = {}
+    timeout_failures = 0
 
     transient_errors = (
         httpx.ConnectError,
@@ -1095,6 +1133,9 @@ async def fetch_url_with_fallback(
                 )
 
                 if response.status_code >= 400:
+                    status_counts[response.status_code] = (
+                        status_counts.get(response.status_code, 0) + 1
+                    )
                     failures.append(
                         f"round {round_index + 1} {candidate} -> "
                         f"HTTP {response.status_code}"
@@ -1107,6 +1148,16 @@ async def fetch_url_with_fallback(
 
             except transient_errors as exc:
                 saw_transient_failure = True
+                if isinstance(
+                    exc,
+                    (
+                        httpx.ConnectTimeout,
+                        httpx.ReadTimeout,
+                        httpx.WriteTimeout,
+                        httpx.PoolTimeout,
+                    ),
+                ):
+                    timeout_failures += 1
                 failures.append(
                     f"round {round_index + 1} {candidate} -> "
                     f"{describe_http_error(exc)}"
@@ -1117,6 +1168,17 @@ async def fetch_url_with_fallback(
                     f"round {round_index + 1} {candidate} -> "
                     f"{describe_http_error(exc)}"
                 )
+
+        # If most URL variants are explicitly refusing automated access,
+        # retrying every variant for more rounds only makes a 50-site batch
+        # slower without improving the result.
+        blocked_attempts = (
+            status_counts.get(401, 0)
+            + status_counts.get(403, 0)
+        )
+
+        if blocked_attempts >= 3:
+            break
 
         if not saw_transient_failure:
             break
@@ -1130,13 +1192,43 @@ async def fetch_url_with_fallback(
                 FETCH_RETRY_BACKOFF_SECONDS[backoff_index]
             )
 
-    # Keep the message compact enough for CSV/UI while still exposing the
-    # underlying network cause and whether retries were attempted.
+    # Keep diagnostics available for engineering while returning a concise,
+    # buyer-friendly outcome to the UI/CSV.
     failure_summary = "; ".join(failures[-8:])
+    blocked_attempts = (
+        status_counts.get(401, 0)
+        + status_counts.get(403, 0)
+    )
 
-    raise RuntimeError(
-        "Unable to fetch the website after resilient URL fallback/retries"
-        + (f": {failure_summary}" if failure_summary else ".")
+    if blocked_attempts >= 2:
+        raise WebsiteFetchError(
+            "Site blocked automated access. Browser verification required.",
+            failure_type="ACCESS_BLOCKED",
+            status="Blocked",
+            diagnostic=failure_summary,
+        )
+
+    if status_counts.get(429, 0):
+        raise WebsiteFetchError(
+            "Site rate-limited automated access. Retry later or verify in a browser.",
+            failure_type="RATE_LIMITED",
+            status="Blocked",
+            diagnostic=failure_summary,
+        )
+
+    if timeout_failures and not status_counts:
+        raise WebsiteFetchError(
+            "Site did not respond within the scan timeout. Browser verification required.",
+            failure_type="TIMEOUT",
+            status="Failed",
+            diagnostic=failure_summary,
+        )
+
+    raise WebsiteFetchError(
+        "Unable to fetch the website after resilient URL fallback/retries.",
+        failure_type="FETCH_FAILED",
+        status="Failed",
+        diagnostic=failure_summary,
     )
 
 
@@ -1173,7 +1265,7 @@ def clean_text(
     return re.sub(
         r"\s+",
         " ",
-        str(value),
+        html_lib.unescape(str(value)),
     ).strip()
 
 
@@ -1249,6 +1341,59 @@ def looks_like_non_brand_phrase(
     )
 
     if sentence_breaks >= 2:
+        return True
+
+    # Generic service/location title fragments are not reliable brands.
+    # Examples: "CPA Austin", "Dentist Matthews", "HVAC Dallas".
+    profession_heads = {
+        "cpa",
+        "accountant",
+        "accounting",
+        "dentist",
+        "dentistry",
+        "dental",
+        "lawyer",
+        "attorney",
+        "plumber",
+        "plumbing",
+        "hvac",
+        "roofer",
+        "roofing",
+        "clinic",
+    }
+
+    if (
+        2 <= len(phrase_words) <= 4
+        and phrase_words[0] in profession_heads
+        and not re.search(
+            r"\b(?:llc|pllc|inc|corp|ltd|company|group|associates?|partners?)\b",
+            lowered,
+        )
+    ):
+        return True
+
+    # Slogan / sentence fragments should never receive high business-name
+    # confidence simply because they appear in a title or heading.
+    if (
+        len(phrase_words) >= 4
+        and re.search(r"\b(?:we|you|your|our|they|their|us)\b", lowered)
+        and re.search(
+            r"\b(?:make|makes|work|works|help|helps|find|finds|get|gets|"
+            r"connect|connects|build|builds|grow|grows|save|saves|learn|"
+            r"discover|see|start)\b",
+            lowered,
+        )
+    ):
+        return True
+
+    if (
+        len(phrase_words) >= 5
+        and re.match(
+            r"^(?:find|discover|see|learn|get|build|make|meet|experience|"
+            r"unlock|start)\b",
+            lowered,
+        )
+    ):
         return True
 
     # Navigation / content labels such as "Our team" or "Our Yelp profile".
@@ -1414,7 +1559,7 @@ def looks_generic_business_name(
         "is", "are", "was", "were", "be",
     }:
         return True
-    
+
     # A single ordinary English word is almost never
     # enough evidence to call something a company name.
     words = text.split()
@@ -1482,6 +1627,17 @@ def clean_business_name_candidate(
 
     if not value:
         return ""
+
+    # Normalize brand + marketing-descriptor titles such as
+    # "Ahrefs—AI Marketing Platform" to the actual brand token.
+    value = re.sub(
+        r"\s*[—–]\s*(?:ai\s+)?(?:marketing|software|seo|sales|"
+        r"commerce|business|customer|work|productivity)\s+"
+        r"(?:platform|software|suite|tool|tools|solution|solutions)\b.*$",
+        "",
+        value,
+        flags=re.I,
+    ).strip()
 
     # Agency/website credits are not the client business name.
     # Reject the whole candidate instead of accidentally turning
@@ -1790,6 +1946,7 @@ def infer_business_name_from_domain(
         "financial",
         "insurance",
         "accounting",
+        "cpa",
         "architect",
         "architecture",
         "automotive",
@@ -2671,6 +2828,24 @@ def resolve_business_identity_conflict(
         and not current_has_primary_brand_evidence
         and candidate_has_primary_brand_evidence
         and candidate_score >= 86
+    ):
+        should_override_identity = True
+
+    # Domain/email inference is a fallback. A clean H1 identity visibly
+    # presented as the site's primary brand should beat a guessed domain token
+    # even when the brand is not encoded in the domain (for example legacy or
+    # practitioner-owned domains).
+    if (
+        not should_override_identity
+        and business_name_source in {
+            "domain_inference",
+            "domain_inference_verified",
+            "email_domain_inference",
+        }
+        and candidate_source == "visible_h1_identity"
+        and candidate_has_primary_brand_evidence
+        and candidate_confidence >= 90
+        and not current_has_primary_brand_evidence
     ):
         should_override_identity = True
 
@@ -5797,314 +5972,211 @@ def detect_us_location_score(
     )
 
 
+def normalize_country_value(
+    value,
+) -> Optional[str]:
+    """Normalize JSON-LD/meta country values to an ISO-like 2-letter code."""
+
+    if isinstance(value, dict):
+        value = (
+            value.get("name")
+            or value.get("addressCountry")
+            or value.get("@id")
+        )
+
+    if not isinstance(value, str):
+        return None
+
+    cleaned = clean_text(value)
+
+    if not cleaned:
+        return None
+
+    upper = cleaned.upper()
+    known_codes = set(TLD_COUNTRY_MAP.values()) | {
+        "US", "GB", "CA", "AU", "NZ", "IN", "DE", "FR", "IT", "ES",
+        "PT", "NL", "BE", "CH", "AT", "IE", "JP", "CN", "SG", "MY",
+        "ID", "TH", "PH", "VN", "KR", "AE", "SA", "QA", "KW", "BH",
+        "OM", "ZA", "NG", "KE", "GH", "EG", "BR", "MX", "AR", "CL",
+        "CO", "PE",
+    }
+
+    if len(upper) == 2 and upper in known_codes:
+        return upper
+
+    lowered = cleaned.casefold()
+
+    if lowered in COUNTRY_NAMES:
+        return COUNTRY_NAMES[lowered]
+
+    # Handle values such as "US-TX" or "en-US" conservatively.
+    if re.fullmatch(r"[A-Za-z]{2}[-_][A-Za-z]{2,3}", cleaned):
+        possible = cleaned.split("-")[-1].split("_")[-1].upper()
+        if possible in known_codes:
+            return possible
+
+    return None
+
+
+def extract_structured_country_candidates(
+    soup: BeautifulSoup,
+) -> list[str]:
+    """Extract country evidence from structured organization/address data."""
+
+    found: list[str] = []
+
+    def add_value(value) -> None:
+        code = normalize_country_value(value)
+        if code:
+            found.append(code)
+
+    def inspect_address(address) -> None:
+        if isinstance(address, dict):
+            add_value(address.get("addressCountry"))
+        elif isinstance(address, list):
+            for entry in address:
+                inspect_address(entry)
+
+    for item in iter_jsonld_objects(soup):
+        inspect_address(item.get("address"))
+
+        location = item.get("location")
+        if isinstance(location, dict):
+            inspect_address(location.get("address"))
+
+    return found
+
+
 def detect_locale_signals(
     soup: BeautifulSoup,
     url: str,
     phones: Optional[list[str]] = None,
     html_content: str = "",
 ) -> dict:
+    """Infer locale conservatively.
 
-    html_tag = soup.find(
-        "html"
-    )
+    v6.6 deliberately prefers Unknown over a confident but wrong country.
+    Global websites often contain many hreflang regions, currencies and
+    support phone numbers; those weak signals must not masquerade as a local
+    business location.
+    """
 
+    html_tag = soup.find("html")
     language = None
 
     if html_tag:
-
-        raw_lang = html_tag.get(
-            "lang"
-        )
-
+        raw_lang = html_tag.get("lang")
         if raw_lang:
-
-            language = clean_text(
-                raw_lang
-            ).lower()
+            language = clean_text(raw_lang).lower()
 
     language_country = None
-
-    language_country_confidence = (
-        "None"
-    )
+    language_country_confidence = "None"
 
     if language and "-" in language:
-
-        possible = language.rsplit(
-            "-",
-            1,
-        )[1].upper()
-
-        if (
-            len(possible) == 2
-            and possible
-            in set(
-                TLD_COUNTRY_MAP.values()
-            )
-        ):
-
+        possible = language.rsplit("-", 1)[1].upper()
+        if len(possible) == 2 and possible in set(TLD_COUNTRY_MAP.values()):
             language_country = possible
+            language_country_confidence = "Weak"
 
-            language_country_confidence = (
-                "Weak"
-            )
-
-    text = soup.get_text(
-        " ",
-        strip=True,
+    text = soup.get_text(" ", strip=True)
+    combined_country_text = (
+        f"{text} {html_content[:50000]}"
+        if html_content
+        else text
     )
 
-    if html_content:
-
-        combined_country_text = (
-            f"{text} "
-            f"{html_content[:50000]}"
-        )
-
-    else:
-
-        combined_country_text = text
-
     currency_patterns = {
-        "USD": [
-            "USD",
-            "US$",
-        ],
-        "EUR": [
-            "EUR",
-            "€",
-        ],
-        "GBP": [
-            "GBP",
-            "£",
-        ],
-        "INR": [
-            "INR",
-            "₹",
-            "Rs.",
-            "Rs ",
-            "INR.",
-        ],
-        "CAD": [
-            "CAD",
-            "C$",
-        ],
-        "AUD": [
-            "AUD",
-            "A$",
-        ],
-        "JPY": [
-            "JPY",
-            "¥",
-        ],
-        "CNY": [
-            "CNY",
-            "RMB",
-        ],
-        "AED": [
-            "AED",
-        ],
-        "SAR": [
-            "SAR",
-        ],
-        "SGD": [
-            "SGD",
-            "S$",
-        ],
-        "NZD": [
-            "NZD",
-            "NZ$",
-        ],
-        "MYR": [
-            "MYR",
-            "RM ",
-        ],
-        "BRL": [
-            "BRL",
-            "R$",
-        ],
-        "ZAR": [
-            "ZAR",
-        ],
-        "MXN": [
-            "MXN",
-        ],
+        "USD": ["USD", "US$"],
+        "EUR": ["EUR", "€"],
+        "GBP": ["GBP", "£"],
+        "INR": ["INR", "₹", "Rs.", "Rs ", "INR."],
+        "CAD": ["CAD", "C$"],
+        "AUD": ["AUD", "A$"],
+        "JPY": ["JPY", "¥"],
+        "CNY": ["CNY", "RMB"],
+        "AED": ["AED"],
+        "SAR": ["SAR"],
+        "SGD": ["SGD", "S$"],
+        "NZD": ["NZD", "NZ$"],
+        "MYR": ["MYR", "RM "],
+        "BRL": ["BRL", "R$"],
+        "ZAR": ["ZAR"],
+        "MXN": ["MXN"],
     }
 
     currency_hints: list[str] = []
-
     for currency, patterns in currency_patterns.items():
+        if any(pattern in combined_country_text for pattern in patterns):
+            currency_hints.append(currency)
 
-        if any(
-            pattern in combined_country_text
-            for pattern in patterns
-        ):
-
-            currency_hints.append(
-                currency
-            )
-
-    tld = ""
-
-    hostname = get_domain(
-        url
-    )
-
-    if "." in hostname:
-
-        tld = hostname.rsplit(
-            ".",
-            1,
-        )[1].lower()
-
-    tld_country = TLD_COUNTRY_MAP.get(
-        tld
-    )
+    hostname = get_domain(url)
+    tld = hostname.rsplit(".", 1)[1].lower() if "." in hostname else ""
+    tld_country = TLD_COUNTRY_MAP.get(tld)
 
     explicit_countries = extract_country_names(
         combined_country_text[:70000]
     )
-
     explicit_country = (
         explicit_countries[0]
-        if explicit_countries
+        if len(explicit_countries) == 1
         else None
     )
 
+    structured_countries = extract_structured_country_candidates(soup)
+    structured_country = None
+    if structured_countries:
+        counts: dict[str, int] = {}
+        for country in structured_countries:
+            counts[country] = counts.get(country, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
+        if len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+            structured_country = ranked[0][0]
+
     phone_countries: list[str] = []
-
     if phones:
-
         for phone in phones:
-
-            digits = re.sub(
-                r"\D",
-                "",
-                str(phone),
-            )
-
-            country = get_phone_country(
-                str(phone)
-            )
-
+            country = get_phone_country(str(phone))
             if country:
+                phone_countries.append(country)
 
-                phone_countries.append(
-                    country
-                )
-
-    # Explicit +91 source-level evidence only. Use the same validated
-    # contact-context extractor as phone parsing; raw script digits are not
-    # country evidence.
+    # Keep one source-level +91 clue if the normalized phone list missed it.
+    # Do not multiply it or make India automatically win on global sites.
     html_india_phone_matches = (
-        extract_explicit_india_phones(
-            html_content
-        )
+        extract_explicit_india_phones(html_content)
         if html_content
         else []
     )
-
-    if html_india_phone_matches:
-
-        phone_countries.extend(
-            ["IN"] * min(
-                4,
-                len(
-                    html_india_phone_matches
-                ),
-            )
-        )
+    if html_india_phone_matches and "IN" not in phone_countries:
+        phone_countries.append("IN")
 
     phone_country = None
+    phone_country_counts: dict[str, int] = {}
+    for country in phone_countries:
+        phone_country_counts[country] = phone_country_counts.get(country, 0) + 1
 
-    if phone_countries:
-
-        # Explicit Indian +91 evidence wins over ambiguous
-        # malformed generic international-looking candidates.
-        if "IN" in phone_countries:
-
-            phone_country = "IN"
-
-        else:
-
-            counts: dict[str, int] = {}
-
-            for country in phone_countries:
-
-                counts[country] = (
-                    counts.get(
-                        country,
-                        0,
-                    )
-                    + 1
-                )
-
-            phone_country = max(
-                counts,
-                key=counts.get,
-            )
-
-    evidence: dict[str, int] = {}
-
-    def add(
-        country: Optional[str],
-        weight: int,
-    ):
-
-        if not country:
-            return
-
-        evidence[country] = (
-            evidence.get(
-                country,
-                0,
-            )
-            + weight
+    if phone_country_counts:
+        ranked_phones = sorted(
+            phone_country_counts.items(),
+            key=lambda item: item[1],
+            reverse=True,
         )
+        if len(ranked_phones) == 1:
+            phone_country = ranked_phones[0][0]
+        elif ranked_phones[0][1] > ranked_phones[1][1]:
+            phone_country = ranked_phones[0][0]
 
-    add(
-        phone_country,
-        100,
-    )
+    hreflang_countries: list[str] = []
+    for link in soup.find_all("link", href=True):
+        hreflang = link.get("hreflang")
+        if not hreflang:
+            continue
+        hreflang = str(hreflang).lower()
+        if "-" in hreflang:
+            possible = hreflang.rsplit("-", 1)[1].upper()
+            if len(possible) == 2 and possible in set(TLD_COUNTRY_MAP.values()):
+                hreflang_countries.append(possible)
 
-    add(
-        explicit_country,
-        80,
-    )
-
-    # Supplemental India location evidence.
-    india_location_score = detect_india_location_score(
-        combined_country_text[:70000]
-    )
-
-    if india_location_score:
-
-        evidence["IN"] = (
-            evidence.get(
-                "IN",
-                0,
-            )
-            + (
-                15
-                * india_location_score
-            )
-        )
-
-    us_location_score = detect_us_location_score(
-        combined_country_text[:70000]
-    )
-
-    if us_location_score:
-        evidence["US"] = (
-            evidence.get(
-                "US",
-                0,
-            )
-            + (
-                30
-                * us_location_score
-            )
-        )
+    unique_hreflang_countries = set(hreflang_countries)
 
     currency_country = {
         "USD": "US",
@@ -6125,179 +6197,147 @@ def detect_locale_signals(
         "MXN": "MX",
     }
 
-    for currency in currency_hints:
+    currency_country_candidates = {
+        country
+        for currency in currency_hints
+        if (country := currency_country.get(currency))
+    }
 
-        add(
-            currency_country.get(
-                currency
-            ),
-            35,
-        )
-
-    add(
-        tld_country,
-        25,
+    # Many regional hreflangs/currencies/country mentions are a hallmark of a
+    # global site. On those sites, a single support phone must not define the
+    # company's country.
+    global_locale_surface = bool(
+        len(unique_hreflang_countries) >= 3
+        or len(explicit_countries) >= 4
+        or len(currency_country_candidates) >= 3
+        or len(set(phone_countries)) >= 3
     )
 
-    hreflang_countries: list[str] = []
-
-    for link in soup.find_all(
-        "link",
-        href=True,
-    ):
-
-        hreflang = link.get(
-            "hreflang"
-        )
-
-        if not hreflang:
-            continue
-
-        hreflang = str(
-            hreflang
-        ).lower()
-
-        if "-" in hreflang:
-
-            possible = hreflang.rsplit(
-                "-",
-                1,
-            )[1].upper()
-
-            if (
-                len(possible) == 2
-                and possible in set(
-                    TLD_COUNTRY_MAP.values()
-                )
-            ):
-
-                hreflang_countries.append(
-                    possible
-                )
-
-    for country in set(
-        hreflang_countries
-    ):
-
-        add(
-            country,
-            18,
-        )
-
-    add(
-        language_country,
-        5,
+    india_location_score = detect_india_location_score(
+        combined_country_text[:70000]
     )
+    us_location_score = detect_us_location_score(
+        combined_country_text[:70000]
+    )
+
+    evidence: dict[str, int] = {}
+    evidence_sources: dict[str, set[str]] = {}
+
+    def add(country: Optional[str], weight: int, source: str) -> None:
+        if not country or weight <= 0:
+            return
+        evidence[country] = evidence.get(country, 0) + weight
+        evidence_sources.setdefault(country, set()).add(source)
+
+    add(structured_country, 120, "structured_country")
+
+    if us_location_score:
+        add("US", 35 * us_location_score, "us_address")
+
+    if india_location_score:
+        add("IN", 25 * india_location_score, "india_location")
+
+    add(tld_country, 55, "tld")
+
+    if explicit_country:
+        add(explicit_country, 55, "explicit_country")
+
+    if phone_country:
+        add(
+            phone_country,
+            25 if global_locale_surface else 65,
+            "phone",
+        )
+
+    if len(currency_country_candidates) == 1:
+        add(next(iter(currency_country_candidates)), 25, "currency")
+
+    if len(unique_hreflang_countries) == 1:
+        add(next(iter(unique_hreflang_countries)), 18, "hreflang")
+
+    add(language_country, 6, "language")
 
     country_hint = None
     country_confidence = "Unknown"
 
     if evidence:
+        winner = max(evidence, key=evidence.get)
+        score = evidence[winner]
+        sources = evidence_sources.get(winner, set())
 
-        country_hint = max(
-            evidence,
-            key=evidence.get,
-        )
+        strong_local_sources = {
+            "structured_country",
+            "us_address",
+            "india_location",
+            "tld",
+        }
 
-        score = evidence[
-            country_hint
-        ]
-
-        if score >= 70:
-            country_confidence = "High"
-
-        elif score >= 35:
-            country_confidence = "Medium"
-
+        # If this looks like a global site and the winner comes only from
+        # weak regional/support signals, abstain instead of guessing.
+        if global_locale_surface and not sources.intersection(strong_local_sources):
+            winner = None
         else:
-            country_confidence = "Low"
+            country_hint = winner
+
+            if (
+                "structured_country" in sources
+                or (winner == "US" and us_location_score >= 2)
+                or (winner == "IN" and india_location_score >= 2)
+                or (score >= 100 and len(sources) >= 2)
+            ):
+                country_confidence = "High"
+            elif score >= 55 and (
+                len(sources) >= 2
+                or "phone" in sources
+                or "tld" in sources
+            ):
+                country_confidence = "Medium"
+            else:
+                country_confidence = "Low"
 
     primary_currency = None
     primary_currency_symbol = None
     currency_source = "unknown"
 
     country_currency = (
-        COUNTRY_CURRENCY_MAP.get(
-            country_hint
-        )
+        COUNTRY_CURRENCY_MAP.get(country_hint)
         if country_hint
         else None
     )
 
     strong_country_currency_match = False
-
     if (
         country_hint
-        and country_confidence in {
-            "High",
-            "Medium",
-        }
+        and country_confidence in {"High", "Medium"}
         and country_currency
     ):
-
         expected_currency = country_currency[0]
-
-        expected_country = currency_country.get(
-            expected_currency
-        )
-
+        expected_country = currency_country.get(expected_currency)
         if expected_country == country_hint:
-
             strong_country_currency_match = True
 
-    if (
-        strong_country_currency_match
-        and country_currency
-    ):
-
-        (
-            primary_currency,
-            primary_currency_symbol,
-        ) = country_currency
-
-        currency_source = (
-            "country_inferred"
-        )
-
-    elif currency_hints:
-
-        # When site has a strong currency hint and
-        # country evidence is weak, use site evidence.
-        primary_currency = (
-            currency_hints[0]
-        )
-
-        primary_currency_symbol = (
-            CURRENCY_SYMBOL_MAP.get(
-                primary_currency
-            )
-        )
-
-        currency_source = (
-            "site_detected"
-        )
-
+    if strong_country_currency_match and country_currency:
+        primary_currency, primary_currency_symbol = country_currency
+        currency_source = "country_inferred"
+    elif len(currency_hints) == 1:
+        primary_currency = currency_hints[0]
+        primary_currency_symbol = CURRENCY_SYMBOL_MAP.get(primary_currency)
+        currency_source = "site_detected"
     elif country_currency:
-
-        (
-            primary_currency,
-            primary_currency_symbol,
-        ) = country_currency
-
-        currency_source = (
-            "country_inferred"
-        )
+        primary_currency, primary_currency_symbol = country_currency
+        currency_source = "country_inferred"
 
     country_evidence = {
         "phone_country": phone_country,
+        "structured_country": structured_country,
         "explicit_country": explicit_country,
         "tld_country": tld_country,
         "language_country": language_country,
-        "language_country_confidence": (
-            language_country_confidence
-        ),
+        "language_country_confidence": language_country_confidence,
         "us_location_score": us_location_score,
         "india_location_score": india_location_score,
+        "global_locale_surface": global_locale_surface,
+        "hreflang_country_count": len(unique_hreflang_countries),
     }
 
     return {
@@ -6307,9 +6347,7 @@ def detect_locale_signals(
         "country_evidence": country_evidence,
         "currency_hints": currency_hints[:8],
         "primary_currency": primary_currency,
-        "primary_currency_symbol": (
-            primary_currency_symbol
-        ),
+        "primary_currency_symbol": primary_currency_symbol,
         "currency_source": currency_source,
     }
 
@@ -6596,6 +6634,17 @@ def generate_sales_intel(
     locale_signals = data.get(
         "locale_signals",
         {},
+    )
+
+    locale_country_evidence = locale_signals.get(
+        "country_evidence",
+        {},
+    )
+    global_locale_surface = bool(
+        locale_country_evidence.get(
+            "global_locale_surface",
+            False,
+        )
     )
 
     contactability = data.get(
@@ -7256,6 +7305,12 @@ def generate_sales_intel(
     elif commercial_intent == "MEDIUM":
         prospect_score += 2
 
+    # Multi-region/global product sites are usually poor fits for the local-SMB
+    # outbound workflow QuickLead is designed to prioritize. Keep them visible
+    # for research, but prevent them from outranking actionable local prospects.
+    if global_locale_surface:
+        prospect_score -= 18
+
     prospect_score = max(
         0,
         min(
@@ -7271,7 +7326,13 @@ def generate_sales_intel(
         )
     )
 
-    if (
+    if global_locale_surface:
+        prospect_decision = (
+            "VERIFY"
+            if opportunity_score >= 60
+            else "SKIP"
+        )
+    elif (
         prospect_score >= 60
         and preferred_email
         and opportunity_score >= 40
@@ -7297,6 +7358,11 @@ def generate_sales_intel(
         prospect_decision = "SKIP"
 
     prospect_reasons: list[str] = []
+
+    if global_locale_surface:
+        prospect_reasons.append(
+            "Global or multi-region site detected; deprioritized for local-SMB outreach"
+        )
 
     if opportunity_score >= 55:
         prospect_reasons.append(
@@ -8709,12 +8775,25 @@ async def process_single_url(
 
     except Exception as exc:
 
+        if isinstance(exc, WebsiteFetchError):
+            return {
+                "input_url": input_url,
+                "resolved_url": "",
+                "url": target_url,
+                "attempted_urls": attempted_urls,
+                "status": exc.status,
+                "failure_type": exc.failure_type,
+                "error": str(exc),
+                "diagnostic": exc.diagnostic,
+            }
+
         return {
             "input_url": input_url,
             "resolved_url": "",
             "url": target_url,
             "attempted_urls": attempted_urls,
             "status": "Failed",
+            "failure_type": "PROCESSING_ERROR",
             "error": str(exc),
         }
 
@@ -8745,7 +8824,7 @@ async def scan_target(
         if (
             not result
             or result.get("status")
-            == "Failed"
+            != "Success"
         ):
 
             raise HTTPException(
@@ -9678,7 +9757,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.5.6",
+        "version": "6.6.0",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),

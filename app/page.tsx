@@ -149,7 +149,9 @@ type LeadData = {
   };
 
   status?: string;
+  failure_type?: string;
   error?: string;
+  diagnostic?: string;
 
   intelligence?: {
     website_score?: number;
@@ -612,6 +614,15 @@ export default function QuickLeadDashboard() {
         (item) =>
           item.status ===
           "Success"
+      );
+    }, [bulkData]);
+
+  const blockedBulkLeads =
+    useMemo(() => {
+      return bulkData.filter(
+        (item) =>
+          item.status ===
+          "Blocked"
       );
     }, [bulkData]);
 
@@ -1472,6 +1483,7 @@ export default function QuickLeadDashboard() {
           "Phone",
           "Email",
           "Scan Status",
+          "Failure Type",
           "Error",
         ],
       ];
@@ -1578,6 +1590,7 @@ export default function QuickLeadDashboard() {
                 "",
               "Success",
               "",
+              "",
             ]);
           } else {
             const failedRow: (
@@ -1600,8 +1613,16 @@ export default function QuickLeadDashboard() {
             failedRow[3] =
               item.url || "";
             failedRow[
+              failedRow.length - 3
+            ] = (
+              item.status ||
+              "Failed"
+            ).toUpperCase();
+            failedRow[
               failedRow.length - 2
-            ] = "FAILED";
+            ] =
+              item.failure_type ||
+              "FETCH_FAILED";
             failedRow[
               failedRow.length - 1
             ] =
@@ -3347,7 +3368,7 @@ export default function QuickLeadDashboard() {
           bulkData.length > 0 && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
 
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
 
                 <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5">
                   <p className="text-xs text-neutral-500 uppercase tracking-wider">
@@ -3386,6 +3407,16 @@ export default function QuickLeadDashboard() {
 
                   <p className="text-3xl font-bold text-blue-400 mt-2">
                     {successfulBulkLeads.length}
+                  </p>
+                </div>
+
+                <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5">
+                  <p className="text-xs text-amber-400 uppercase tracking-wider">
+                    Browser Verify
+                  </p>
+
+                  <p className="text-3xl font-bold text-amber-400 mt-2">
+                    {blockedBulkLeads.length}
                   </p>
                 </div>
 
@@ -3560,8 +3591,14 @@ export default function QuickLeadDashboard() {
                                       {item.url}
                                     </div>
 
-                                    <div className="text-xs text-red-400 mt-1">
-                                      Scan failed
+                                    <div className={`text-xs mt-1 ${
+                                      item.status === "Blocked"
+                                        ? "text-amber-400"
+                                        : "text-red-400"
+                                    }`}>
+                                      {item.status === "Blocked"
+                                        ? "Browser verification required"
+                                        : "Scan failed"}
                                     </div>
                                   </div>
                                 )}
@@ -3645,8 +3682,14 @@ export default function QuickLeadDashboard() {
                                     </span>
                                   </div>
                                 ) : (
-                                  <span className="text-red-400 text-xs">
-                                    FAILED
+                                  <span
+                                    className={`text-xs ${
+                                      item.status === "Blocked"
+                                        ? "text-amber-400"
+                                        : "text-red-400"
+                                    }`}
+                                  >
+                                    {(item.status || "Failed").toUpperCase()}
                                   </span>
                                 )}
                               </td>
