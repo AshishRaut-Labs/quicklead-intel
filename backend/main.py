@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.1 - Buyer Ready Polish
+# QuickLead Intel V6.6.2 - Trust & Contact Quality
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.1",
+    version="6.6.2",
 )
 
 cors_origins = [
@@ -1514,6 +1514,43 @@ def looks_generic_business_name(
     if text in INVALID_STANDALONE_NAME_WORDS:
         return True
 
+    # Punctuation-wrapped one-word fragments such as "me." or "she!"
+    # are still UI/sentence noise, not business identities.
+    standalone_token = re.sub(
+        r"[^a-z0-9]+",
+        "",
+        text,
+    )
+
+    if (
+        standalone_token
+        and len(re.findall(r"[a-z0-9]+", text)) == 1
+        and standalone_token in INVALID_STANDALONE_NAME_WORDS
+    ):
+        return True
+
+    # SEO-style profession titles with multiple profession descriptors are
+    # descriptions rather than identities, e.g. "Austin CPA Accounting Firm".
+    profession_descriptor_hits = sum(
+        1
+        for token in {
+            "cpa", "accounting", "accountant", "tax", "dental",
+            "dentist", "dentistry", "law", "legal", "attorney",
+            "hvac", "plumbing", "roofing", "clinic",
+        }
+        if re.search(rf"\b{re.escape(token)}\b", text)
+    )
+
+    if (
+        profession_descriptor_hits >= 2
+        and re.search(r"\b(?:firm|services?|consultants?|advisors?|practice)\b", text)
+        and not re.search(
+            r"\b(?:llc|pllc|llp|inc|corp|ltd|company|co\.?|group|associates?|partners?)\b",
+            text,
+        )
+    ):
+        return True
+
     if re.fullmatch(
         r"[\d\s.,+%/():\-]+",
         text,
@@ -2645,6 +2682,105 @@ def extract_visible_business_identity_candidate(
 
 
 
+def extract_repeated_visible_business_identity_candidate(
+    soup: BeautifulSoup,
+) -> tuple[str, str, int]:
+    """Recover a business identity from repeated/legal visible copy.
+
+    Older SMB sites often use generic page titles while the actual business
+    name appears in body/footer copy. This remains pattern-based rather than
+    domain-specific.
+    """
+
+    scored: list[tuple[str, int]] = []
+
+    legal_or_professional_suffix = (
+        r"(?:LLC|L\.?L\.?C\.?|LLP|L\.?L\.?P\.?|PLLC|"
+        r"Inc\.?|Incorporated|Corporation|Corp\.?|Company|Co\.?|"
+        r"P\.?C\.?|Ltd\.?|Limited|CPA|CPAs|DDS|DMD)"
+    )
+
+    legal_pattern = re.compile(
+        rf"\b([A-Z][A-Za-z0-9&.'’\-]*"
+        rf"(?:\s+(?:&\s+)?[A-Z][A-Za-z0-9&.'’\-]*){{1,7}}"
+        rf"\s*,?\s*{legal_or_professional_suffix})\b",
+        re.I,
+    )
+
+    context_pattern = re.compile(
+        r"\b(?:at|about|from|welcome\s+to)\s+"
+        r"([A-Z][A-Za-z0-9&.'’\-]*(?:\s+[A-Z][A-Za-z0-9&.'’\-]*){1,5})"
+        r"(?=\s*(?:,|\.|!|\?|\bis\b|\bwe\b|\bour\b|$))",
+        re.I,
+    )
+
+    elements = soup.find_all(
+        ["h1", "h2", "h3", "h4", "p", "li", "span", "strong", "b", "address", "footer"]
+    )
+
+    for element in elements[:500]:
+        if looks_like_agency_credit_element(element):
+            continue
+
+        text_value = clean_text(element.get_text(" ", strip=True))
+        if not text_value or len(text_value) > 600:
+            continue
+
+        for match in legal_pattern.finditer(text_value):
+            candidate = clean_business_name_candidate(match.group(1)).rstrip(" .,:;-")
+            if (
+                candidate
+                and not looks_generic_business_name(candidate)
+                and not looks_like_non_brand_phrase(candidate)
+                and name_quality(candidate) >= 55
+            ):
+                scored.append((candidate, 88))
+
+        for match in context_pattern.finditer(text_value):
+            candidate = clean_business_name_candidate(match.group(1)).rstrip(" .,:;-")
+            if (
+                candidate
+                and not looks_generic_business_name(candidate)
+                and not looks_like_non_brand_phrase(candidate)
+                and not looks_like_seo_marketing_title(candidate)
+                and name_quality(candidate) >= 55
+            ):
+                scored.append((candidate, 90))
+
+    if not scored:
+        return ("", "unknown", 0)
+
+    counts: dict[str, int] = {}
+    best_spelling: dict[str, str] = {}
+    max_confidence: dict[str, int] = {}
+
+    for candidate, confidence in scored:
+        key = clean_business_name_candidate(candidate).casefold()
+        counts[key] = counts.get(key, 0) + 1
+        best_spelling.setdefault(key, candidate)
+        max_confidence[key] = max(max_confidence.get(key, 0), confidence)
+
+    best_key = max(
+        counts,
+        key=lambda key: (
+            max_confidence[key] + min(8, (counts[key] - 1) * 3),
+            name_quality(best_spelling[key]),
+            -len(best_spelling[key]),
+        ),
+    )
+
+    confidence = min(
+        96,
+        max_confidence[best_key] + min(6, (counts[best_key] - 1) * 2),
+    )
+
+    return (
+        best_spelling[best_key],
+        "repeated_visible_identity",
+        confidence,
+    )
+
+
 def business_identity_has_primary_brand_evidence(
     soup: BeautifulSoup,
     business_name: str,
@@ -2762,12 +2898,20 @@ def resolve_business_identity_conflict(
         soup,
         inferred_domain_name,
     )
+    repeated_identity = extract_repeated_visible_business_identity_candidate(
+        soup
+    )
+    meta_identity = extract_meta_description_business_identity_candidate(
+        soup
+    )
 
     identity_candidates = [
         candidate
         for candidate in [
             visible_identity,
             title_identity,
+            repeated_identity,
+            meta_identity,
         ]
         if candidate[0]
     ]
@@ -2932,9 +3076,20 @@ def resolve_business_identity_conflict(
             "domain_inference_verified",
             "email_domain_inference",
         }
-        and candidate_source == "visible_h1_identity"
-        and candidate_has_primary_brand_evidence
-        and candidate_confidence >= 90
+        and candidate_source in {
+            "visible_h1_identity",
+            "repeated_visible_identity",
+            "meta_description_identity",
+        }
+        and candidate_confidence >= 88
+        and (
+            candidate_source == "meta_description_identity"
+            or candidate_has_primary_brand_evidence
+            or business_identity_has_non_agency_visible_mention(
+                soup,
+                candidate_name,
+            )
+        )
         and not current_has_primary_brand_evidence
     ):
         should_override_identity = True
@@ -4478,6 +4633,40 @@ def extract_explicit_india_phones(
     return phones
 
 
+def looks_like_low_confidence_phone_candidate(
+    candidate: str,
+) -> bool:
+    """Reject obvious dates/IDs/placeholders from free-text phone scans."""
+
+    value = clean_text(candidate)
+    digits = re.sub(r"\D", "", value)
+
+    if not digits:
+        return True
+
+    if digits in {
+        "0123456789", "1234567890", "9876543210", "0987654321",
+        "123456789", "987654321",
+    }:
+        return True
+
+    if re.search(r"(\d)\1{4,}", digits):
+        return True
+
+    # Bare short digit runs in ordinary page copy are more often dates,
+    # counters or IDs than contact numbers. tel: links remain trusted.
+    if value.isdigit() and 7 <= len(digits) <= 9:
+        return True
+
+    if len(digits) == 8 and value.isdigit():
+        year_tail = int(digits[-4:])
+        year_head = int(digits[:4])
+        if 1900 <= year_tail <= 2100 or 1900 <= year_head <= 2100:
+            return True
+
+    return False
+
+
 def extract_phone_numbers(
     soup: BeautifulSoup,
     html_content: str = "",
@@ -4615,9 +4804,14 @@ def extract_phone_numbers(
         if not region_text:
             continue
 
-        for candidate in PHONE_CANDIDATE_REGEX.findall(
+        for match in PHONE_CANDIDATE_REGEX.finditer(
             region_text
         ):
+
+            candidate = clean_text(match.group(0))
+
+            if looks_like_low_confidence_phone_candidate(candidate):
+                continue
 
             normalized = normalize_phone_for_country(
                 candidate,
@@ -4664,6 +4858,9 @@ def extract_phone_numbers(
             "",
             candidate,
         )
+
+        if looks_like_low_confidence_phone_candidate(candidate):
+            continue
 
         if (
             len(raw_digits) >= 10
@@ -4877,6 +5074,17 @@ def is_technical_email_address(
     ):
         return True
 
+    # Retina/media asset filenames such as "video-name@2x.mp4" can be
+    # misread by the email regex as "video-name@2x.mp".
+    if (
+        re.fullmatch(r"(?:1x|2x|3x|4x)\.[a-z]{2,4}", email_domain)
+        and re.search(
+            r"(?:^|[-_.])(?:video|image|img|icon|logo|banner|hero|sprite|thumb|thumbnail)(?:[-_.]|$)",
+            local_part,
+        )
+    ):
+        return True
+
     return False
 
 
@@ -4951,7 +5159,7 @@ def extract_emails(
 
     for email in candidates:
 
-        clean = email.strip().lower()
+        clean = urllib.parse.unquote(email).strip().lower()
 
         if clean in seen:
             continue
@@ -8044,6 +8252,12 @@ async def process_single_url(
             meta_identity_confidence,
         ) = extract_meta_description_business_identity_candidate(soup)
 
+        (
+            repeated_identity_name,
+            repeated_identity_source,
+            repeated_identity_confidence,
+        ) = extract_repeated_visible_business_identity_candidate(soup)
+
         # -------------------------------------------------
         # Meta
         # -------------------------------------------------
@@ -8275,6 +8489,12 @@ async def process_single_url(
             and not looks_like_non_brand_phrase(meta_identity_name)
         )
 
+        repeated_identity_is_valid = (
+            bool(repeated_identity_name)
+            and not looks_generic_business_name(repeated_identity_name)
+            and not looks_like_non_brand_phrase(repeated_identity_name)
+        )
+
         domain_name_is_valid = (
             bool(
                 inferred_domain_name
@@ -8339,6 +8559,12 @@ async def process_single_url(
                 business_name = meta_identity_name
                 business_name_source = meta_identity_source
                 business_name_confidence = int(meta_identity_confidence)
+
+            elif repeated_identity_is_valid:
+
+                business_name = repeated_identity_name
+                business_name_source = repeated_identity_source
+                business_name_confidence = int(repeated_identity_confidence)
 
             elif email_identity_is_valid:
 
@@ -8555,6 +8781,12 @@ async def process_single_url(
                 business_name_source = meta_identity_source
                 business_name_confidence = int(meta_identity_confidence)
 
+            elif repeated_identity_is_valid:
+
+                business_name = repeated_identity_name
+                business_name_source = repeated_identity_source
+                business_name_confidence = int(repeated_identity_confidence)
+
             elif domain_name_is_valid:
 
                 business_name = (
@@ -8665,8 +8897,10 @@ async def process_single_url(
             if region_text:
 
                 raw_phone_candidates.extend(
-                    PHONE_CANDIDATE_REGEX.findall(
-                        region_text
+                    clean_text(match.group(0))
+                    for match in PHONE_CANDIDATE_REGEX.finditer(region_text)
+                    if not looks_like_low_confidence_phone_candidate(
+                        clean_text(match.group(0))
                     )
                 )
 
@@ -9919,7 +10153,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.1",
+        "version": "6.6.2",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),

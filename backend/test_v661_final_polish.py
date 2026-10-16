@@ -93,8 +93,8 @@ class QuickLeadV661FinalPolishTests(unittest.TestCase):
         self.assertEqual(locale["country_confidence"], "High")
         self.assertTrue(locale["country_evidence"]["structured_country_is_local"])
 
-    def test_backend_version_is_v661(self):
-        self.assertEqual(main.app.version, "6.6.1")
+    def test_backend_version_is_v661_or_later_patch(self):
+        self.assertRegex(main.app.version, r"^6\.6\.[1-9]\d*$")
 
 
 if __name__ == "__main__":

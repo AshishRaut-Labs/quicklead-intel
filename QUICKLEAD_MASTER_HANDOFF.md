@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Release: **v6.6.1 Buyer Ready Final Polish**
+- Release: **v6.6.2 Trust & Contact Quality**
 - Core backend: `backend/main.py`
 - Frontend: `app/page.tsx`
 - Bulk limit: 50 unique URLs
@@ -47,7 +47,7 @@ npm run build
 Expected backend release:
 
 ```text
-6.6.1
+6.6.2
 ```
 
 Then verify the deployed health endpoint and run a controlled 50-site batch.
@@ -117,3 +117,13 @@ For a paid private deployment, do not rely on obscurity. Put the deployment behi
 4. Prepare a one-page private-deployment offer.
 5. Build a small list of qualified web/SEO/digital-agency owners.
 6. Begin calls/demos only after the buyer-value batch passes.
+
+
+## v6.6.2 trust/contact notes
+
+- Reject punctuation-wrapped UI/pronoun identities such as `me.`.
+- Reject multi-descriptor SEO identities such as `Austin CPA Accounting Firm`.
+- Recover repeated/legal/professional business identities from visible body/footer copy before accepting weak domain guesses.
+- Decode URL-encoded email candidates and filter retina/media asset pseudo-emails.
+- Filter obvious date/ID/placeholder numeric noise from free-text phone extraction while preserving `tel:` and explicit international numbers.
+- Acceptance target: same 50-site live batch with no regression in BLOCKED handling or batch stability.
