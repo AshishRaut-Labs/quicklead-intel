@@ -249,8 +249,8 @@ class QuickLeadV660BuyerReadyTests(unittest.TestCase):
         self.assertNotEqual(result["prospect_decision"], "CONTACT")
         self.assertLess(result["prospect_score"], 60)
 
-    def test_backend_version_is_v660(self):
-        self.assertEqual(main.app.version, "6.6.0")
+    def test_backend_version_is_v66x(self):
+        self.assertRegex(main.app.version, r"^6\.6\.\d+$")
 
 
 if __name__ == "__main__":

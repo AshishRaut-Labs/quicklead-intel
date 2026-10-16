@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.0 - Buyer Ready
+# QuickLead Intel V6.6.1 - Buyer Ready Polish
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.0",
+    version="6.6.1",
 )
 
 cors_origins = [
@@ -434,6 +434,12 @@ BUSINESS_NAME_NOISE = {
 # English sentences, image alt text or CTA copy.
 INVALID_STANDALONE_NAME_WORDS = {
     "javascript",
+    "she",
+    "her",
+    "hers",
+    "he",
+    "him",
+    "his",
     "it",
     "this",
     "that",
@@ -1307,6 +1313,34 @@ def looks_like_non_brand_phrase(
         r"[a-z0-9]+",
         lowered,
     )
+
+    # Browser/runtime fallback messages are not brands.
+    if re.search(
+        r"\bjavascript\b.{0,30}\b(?:disabled|enable|enabled|required|support)\b",
+        lowered,
+    ):
+        return True
+
+    # Generic professional-role labels and service/location headings are not
+    # business identities. These often appear as title fragments on SMB sites.
+    if re.fullmatch(
+        r"(?:tax|business|financial|accounting|marketing|legal|management)\s+"
+        r"(?:consultant|consultants|advisor|advisors|firm|services?)",
+        lowered,
+    ):
+        return True
+
+    if (
+        len(phrase_words) >= 3
+        and phrase_words[0] in {
+            "cpa", "accounting", "accountant", "dentist", "dentistry",
+            "dental", "law", "lawyer", "attorney", "hvac", "plumbing",
+            "roofer", "roofing", "clinic", "tax",
+        }
+        and re.search(r"\b(?:firm|services?|consultants?|advisors?)\b", lowered)
+        and re.search(r"\b(?:in|near|serving)\b", lowered)
+    ):
+        return True
 
     if (
         1 <= len(phrase_words) <= 4
@@ -2443,6 +2477,62 @@ def extract_page_title_identity_candidate(
         "unknown",
         0,
     )
+
+
+def extract_meta_description_business_identity_candidate(
+    soup: BeautifulSoup,
+) -> tuple[str, str, int]:
+    """Recover an explicit legal business name from the meta description.
+
+    This is deliberately conservative: it only accepts a description prefix
+    that ends in a legal/company suffix, e.g.
+    "Meck Noonan & Co., LLC. is a full service accounting firm...".
+    """
+
+    tag = (
+        soup.find(
+            "meta",
+            attrs={"name": re.compile(r"^description$", re.I)},
+        )
+        or soup.find(
+            "meta",
+            attrs={"property": re.compile(r"^og:description$", re.I)},
+        )
+    )
+
+    if not tag:
+        return ("", "unknown", 0)
+
+    description = clean_text(str(tag.get("content") or ""))
+    if not description:
+        return ("", "unknown", 0)
+
+    legal_suffix = (
+        r"(?:LLC|L\.?L\.?C\.?|LLP|L\.?L\.?P\.?|PLLC|"
+        r"Inc\.?|Incorporated|Corporation|Corp\.?|Company|Co\.?|"
+        r"P\.?C\.?|Ltd\.?|Limited)"
+    )
+
+    match = re.match(
+        rf"^(.{{2,100}}?\b{legal_suffix})(?=\s*\.?\s+(?:is|provides|offers|has|serves)\b|\s*$)",
+        description,
+        flags=re.I,
+    )
+
+    if not match:
+        return ("", "unknown", 0)
+
+    candidate = clean_business_name_candidate(match.group(1)).rstrip(" .,:;-")
+
+    if (
+        not candidate
+        or looks_generic_business_name(candidate)
+        or looks_like_non_brand_phrase(candidate)
+        or name_quality(candidate) < 55
+    ):
+        return ("", "unknown", 0)
+
+    return (candidate, "meta_description_identity", 90)
 
 
 def business_identity_has_non_agency_visible_mention(
@@ -6020,10 +6110,30 @@ def normalize_country_value(
 
 def extract_structured_country_candidates(
     soup: BeautifulSoup,
+    local_only: bool = False,
 ) -> list[str]:
-    """Extract country evidence from structured organization/address data."""
+    """Extract country evidence from structured organization/address data.
+
+    When local_only=True, only schemas that strongly describe a local/service
+    business are considered. This keeps global Organization addresses from
+    being mistaken for the visitor-facing market/country.
+    """
 
     found: list[str] = []
+    local_schema_types = {
+        "LocalBusiness", "ProfessionalService", "Store", "Restaurant",
+        "Hotel", "MedicalBusiness", "Dentist", "Attorney",
+        "RealEstateAgent", "FinancialService", "Manufacturer",
+        "SportsActivityLocation",
+    }
+
+    def item_types(item: dict) -> set[str]:
+        raw = item.get("@type")
+        if isinstance(raw, str):
+            return {raw}
+        if isinstance(raw, list):
+            return {str(v) for v in raw}
+        return set()
 
     def add_value(value) -> None:
         code = normalize_country_value(value)
@@ -6038,6 +6148,9 @@ def extract_structured_country_candidates(
                 inspect_address(entry)
 
     for item in iter_jsonld_objects(soup):
+        if local_only and not item_types(item).intersection(local_schema_types):
+            continue
+
         inspect_address(item.get("address"))
 
         location = item.get("location")
@@ -6123,6 +6236,10 @@ def detect_locale_signals(
     )
 
     structured_countries = extract_structured_country_candidates(soup)
+    local_structured_countries = extract_structured_country_candidates(
+        soup,
+        local_only=True,
+    )
     structured_country = None
     if structured_countries:
         counts: dict[str, int] = {}
@@ -6131,6 +6248,11 @@ def detect_locale_signals(
         ranked = sorted(counts.items(), key=lambda item: item[1], reverse=True)
         if len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
             structured_country = ranked[0][0]
+
+    structured_country_is_local = bool(
+        structured_country
+        and structured_country in set(local_structured_countries)
+    )
 
     phone_countries: list[str] = []
     if phones:
@@ -6229,7 +6351,13 @@ def detect_locale_signals(
         evidence[country] = evidence.get(country, 0) + weight
         evidence_sources.setdefault(country, set()).add(source)
 
-    add(structured_country, 120, "structured_country")
+    add(
+        structured_country,
+        120 if structured_country_is_local or not global_locale_surface else 25,
+        "structured_local_country"
+        if structured_country_is_local
+        else "structured_country",
+    )
 
     if us_location_score:
         add("US", 35 * us_location_score, "us_address")
@@ -6265,12 +6393,17 @@ def detect_locale_signals(
         score = evidence[winner]
         sources = evidence_sources.get(winner, set())
 
-        strong_local_sources = {
-            "structured_country",
-            "us_address",
-            "india_location",
-            "tld",
-        }
+        strong_local_sources = (
+            {"structured_local_country", "tld"}
+            if global_locale_surface
+            else {
+                "structured_local_country",
+                "structured_country",
+                "us_address",
+                "india_location",
+                "tld",
+            }
+        )
 
         # If this looks like a global site and the winner comes only from
         # weak regional/support signals, abstain instead of guessing.
@@ -6280,8 +6413,12 @@ def detect_locale_signals(
             country_hint = winner
 
             if (
-                "structured_country" in sources
-                or (winner == "US" and us_location_score >= 2)
+                "structured_local_country" in sources
+                or (
+                    "structured_country" in sources
+                    and not global_locale_surface
+                )
+                or (winner == "US" and us_location_score >= 2 and not global_locale_surface)
                 or (winner == "IN" and india_location_score >= 2)
                 or (score >= 100 and len(sources) >= 2)
             ):
@@ -6330,6 +6467,7 @@ def detect_locale_signals(
     country_evidence = {
         "phone_country": phone_country,
         "structured_country": structured_country,
+        "structured_country_is_local": structured_country_is_local,
         "explicit_country": explicit_country,
         "tld_country": tld_country,
         "language_country": language_country,
@@ -7900,6 +8038,12 @@ async def process_single_url(
             )
         )
 
+        (
+            meta_identity_name,
+            meta_identity_source,
+            meta_identity_confidence,
+        ) = extract_meta_description_business_identity_candidate(soup)
+
         # -------------------------------------------------
         # Meta
         # -------------------------------------------------
@@ -8125,6 +8269,12 @@ async def process_single_url(
             )
         )
 
+        meta_identity_is_valid = (
+            bool(meta_identity_name)
+            and not looks_generic_business_name(meta_identity_name)
+            and not looks_like_non_brand_phrase(meta_identity_name)
+        )
+
         domain_name_is_valid = (
             bool(
                 inferred_domain_name
@@ -8183,6 +8333,12 @@ async def process_single_url(
                     86,
                     int(title_identity_confidence),
                 )
+
+            elif meta_identity_is_valid:
+
+                business_name = meta_identity_name
+                business_name_source = meta_identity_source
+                business_name_confidence = int(meta_identity_confidence)
 
             elif email_identity_is_valid:
 
@@ -8392,6 +8548,12 @@ async def process_single_url(
                     86,
                     int(title_identity_confidence),
                 )
+
+            elif meta_identity_is_valid:
+
+                business_name = meta_identity_name
+                business_name_source = meta_identity_source
+                business_name_confidence = int(meta_identity_confidence)
 
             elif domain_name_is_valid:
 
@@ -9757,7 +9919,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.0",
+        "version": "6.6.1",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),

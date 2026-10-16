@@ -1,6 +1,6 @@
 {
   "name": "quicklead-intel",
-  "version": "6.6.0",
+  "version": "6.6.1",
   "private": true,
   "scripts": {
     "dev": "next dev",

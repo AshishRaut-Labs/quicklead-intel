@@ -2,7 +2,7 @@
 
 QuickLead Intel is an internal prospect-intelligence system for web, SEO and digital agencies. It turns a list of business websites into a ranked prospecting queue with identity, contactability, website/conversion signals, sales opportunity, recommended service, localized project value and outreach context.
 
-**Current release:** v6.6.0 — Buyer Ready
+**Current release:** v6.6.1 — Buyer Ready Final Polish
 
 ## What it does
 

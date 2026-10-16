@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Release: **v6.6.0 Buyer Ready**
+- Release: **v6.6.1 Buyer Ready Final Polish**
 - Core backend: `backend/main.py`
 - Frontend: `app/page.tsx`
 - Bulk limit: 50 unique URLs
@@ -47,7 +47,7 @@ npm run build
 Expected backend release:
 
 ```text
-6.6.0
+6.6.1
 ```
 
 Then verify the deployed health endpoint and run a controlled 50-site batch.
