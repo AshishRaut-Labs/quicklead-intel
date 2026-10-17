@@ -2,7 +2,7 @@
 
 QuickLead Intel is an internal prospect-intelligence system for web, SEO and digital agencies. It turns a list of business websites into a ranked prospecting queue with identity, contactability, website/conversion signals, sales opportunity, recommended service, localized project value and outreach context.
 
-**Current release:** v6.6.2 — Trust & Contact Quality
+**Current release:** v6.6.3 — Identity Guardrails
 
 ## What it does
 
@@ -32,10 +32,16 @@ backend/main.py              FastAPI scanner + intelligence engine
 backend/test_v65_regressions.py
 backend/test_v656_identity_regressions.py
 backend/test_v660_buyer_ready.py
+backend/test_v661_final_polish.py
+backend/test_v662_trust_contact_quality.py
+backend/test_v663_identity_guardrails.py
 V64_CHANGES.md
 V65_CHANGES.md
 V656_CHANGES.md
 V660_CHANGES.md
+V661_CHANGES.md
+V662_CHANGES.md
+V663_CHANGES.md
 QUICKLEAD_MASTER_HANDOFF.md
 ```
 
@@ -69,6 +75,9 @@ python -m pytest \
   backend/test_v65_regressions.py \
   backend/test_v656_identity_regressions.py \
   backend/test_v660_buyer_ready.py \
+  backend/test_v661_final_polish.py \
+  backend/test_v662_trust_contact_quality.py \
+  backend/test_v663_identity_guardrails.py \
   -q
 ```
 
@@ -132,6 +141,12 @@ POST /api/generate-website
 - `Failed` / `FETCH_FAILED`: another bounded fetch failure occurred.
 
 QuickLead deliberately prefers `Unknown` or `VERIFY` over high-confidence guesses when country, identity or rendered conversion evidence is ambiguous.
+
+## v6.6.3 identity guardrails
+
+The final stabilization patch makes identity replacement conservative: domain-aligned/canonical brands are protected from unrelated customer, testimonial, staff or navigation text. It also rejects responsive-menu identity fragments, retina/media pseudo-emails and short date/ID-like phone noise when locale evidence is absent.
+
+The regression suite includes the live failures found in the v6.6.2 acceptance batch, including Zoom/Capital One, Walker Glantz navigation text, a staff first-name false identity, Slack media pseudo-emails and Mailchimp numeric noise.
 
 ## Product positioning
 

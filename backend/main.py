@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.2 - Trust & Contact Quality
+# QuickLead Intel V6.6.3 - Identity Guardrails
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.2",
+    version="6.6.3",
 )
 
 cors_origins = [
@@ -1551,6 +1551,30 @@ def looks_generic_business_name(
     ):
         return True
 
+    # Concatenated responsive-menu labels are not company identities.
+    # Example: "WG About Us Proven Process".
+    navigation_phrases = (
+        "about us",
+        "proven process",
+        "main menu",
+        "menu toggle",
+        "client portal",
+        "contact us",
+        "our services",
+        "learn more",
+        "read more",
+        "get started",
+    )
+
+    navigation_hits = sum(
+        1
+        for phrase in navigation_phrases
+        if phrase in text
+    )
+
+    if navigation_hits >= 2:
+        return True
+
     if re.fullmatch(
         r"[\d\s.,+%/():\-]+",
         text,
@@ -2217,6 +2241,22 @@ def business_names_equivalent(
             if part not in legal_noise
         ]
 
+    left_cleaned = clean_business_name_candidate(left).casefold().strip()
+    right_cleaned = clean_business_name_candidate(right).casefold().strip()
+
+    # Some businesses intentionally use the .com form as the brand.
+    # Preserve that canonical spelling instead of treating it as a different
+    # identity from the bare domain token.
+    left_without_dotcom = re.sub(r"\.com$", "", left_cleaned)
+    right_without_dotcom = re.sub(r"\.com$", "", right_cleaned)
+
+    if (
+        left_without_dotcom
+        and right_without_dotcom
+        and left_without_dotcom == right_without_dotcom
+    ):
+        return True
+
     left_tokens = tokens(left)
     right_tokens = tokens(right)
 
@@ -2372,6 +2412,32 @@ def title_identity_matches_domain(
     )
 
     return match_count >= 2
+
+
+def strong_business_identity_matches_domain(
+    business_name: str,
+    inferred_name: str,
+) -> bool:
+    """Use strict brand/domain consensus when replacing an identity.
+
+    The general token-overlap helper is useful elsewhere, but a single shared
+    token (for example "WG") is not enough evidence to replace a business
+    name with navigation or testimonial text.
+    """
+
+    if not business_name or not inferred_name:
+        return False
+
+    if business_names_equivalent(
+        business_name,
+        inferred_name,
+    ):
+        return True
+
+    return title_identity_matches_domain(
+        business_name,
+        inferred_name,
+    )
 
 
 def extract_page_title_identity_candidate(
@@ -2924,15 +2990,9 @@ def resolve_business_identity_conflict(
 
         if (
             domain_name_is_valid
-            and (
-                business_name_matches_domain(
-                    candidate_name,
-                    inferred_domain_name,
-                )
-                or title_identity_matches_domain(
-                    candidate_name,
-                    inferred_domain_name,
-                )
+            and strong_business_identity_matches_domain(
+                candidate_name,
+                inferred_domain_name,
             )
         ):
             score += 28
@@ -2948,6 +3008,18 @@ def resolve_business_identity_conflict(
 
         if len(candidate_name.split()) == 1:
             score -= 14
+
+            # A lone visible/person-like word unrelated to the domain is
+            # especially risky. Legitimate one-word brands such as Zoom and
+            # Nike retain domain consensus and avoid this penalty.
+            if (
+                domain_name_is_valid
+                and not strong_business_identity_matches_domain(
+                    candidate_name,
+                    inferred_domain_name,
+                )
+            ):
+                score -= 30
 
         return score
 
@@ -2965,15 +3037,9 @@ def resolve_business_identity_conflict(
 
     current_matches_domain = bool(
         domain_name_is_valid
-        and (
-            business_name_matches_domain(
-                business_name,
-                inferred_domain_name,
-            )
-            or title_identity_matches_domain(
-                business_name,
-                inferred_domain_name,
-            )
+        and strong_business_identity_matches_domain(
+            business_name,
+            inferred_domain_name,
         )
     )
 
@@ -3012,15 +3078,9 @@ def resolve_business_identity_conflict(
     )
     candidate_matches_domain = bool(
         domain_name_is_valid
-        and (
-            business_name_matches_domain(
-                candidate_name,
-                inferred_domain_name,
-            )
-            or title_identity_matches_domain(
-                candidate_name,
-                inferred_domain_name,
-            )
+        and strong_business_identity_matches_domain(
+            candidate_name,
+            inferred_domain_name,
         )
     )
 
@@ -3033,15 +3093,59 @@ def resolve_business_identity_conflict(
 
     should_override_identity = False
 
+    current_tokens = re.findall(
+        r"[a-z0-9]+",
+        clean_business_name_candidate(business_name).casefold(),
+    )
+    candidate_tokens = re.findall(
+        r"[a-z0-9]+",
+        clean_business_name_candidate(candidate_name).casefold(),
+    )
+
+    current_is_unaligned_single_word = bool(
+        len(current_tokens) == 1
+        and domain_name_is_valid
+        and not current_matches_domain
+        and business_name_source not in {
+            "json_ld_brand",
+            "json_ld_legalName",
+        }
+    )
+
+    candidate_is_stronger_primary_identity = bool(
+        len(candidate_tokens) >= 2
+        and candidate_confidence >= 86
+        and not looks_generic_business_name(candidate_name)
+        and (
+            candidate_has_primary_brand_evidence
+            or candidate_matches_domain
+            or candidate_source in {
+                "meta_description_identity",
+                "repeated_visible_identity",
+            }
+        )
+    )
+
+    # Review/staff first names must not become the business when a stronger
+    # multi-word title/header/legal identity is available.
     if (
-        candidate_matches_domain
+        current_is_unaligned_single_word
+        and candidate_is_stronger_primary_identity
+    ):
+        should_override_identity = True
+
+    if (
+        not should_override_identity
+        and candidate_matches_domain
         and not current_matches_domain
         and candidate_score >= 105
     ):
         should_override_identity = True
 
     elif (
-        business_name_source in structured_sources
+        not should_override_identity
+        and business_name_source in structured_sources
+        and not current_matches_domain
         and not current_has_real_visible_mention
         and candidate_score >= 88
     ):
@@ -5075,13 +5179,12 @@ def is_technical_email_address(
         return True
 
     # Retina/media asset filenames such as "video-name@2x.mp4" can be
-    # misread by the email regex as "video-name@2x.mp".
-    if (
-        re.fullmatch(r"(?:1x|2x|3x|4x)\.[a-z]{2,4}", email_domain)
-        and re.search(
-            r"(?:^|[-_.])(?:video|image|img|icon|logo|banner|hero|sprite|thumb|thumbnail)(?:[-_.]|$)",
-            local_part,
-        )
+    # misread by the email regex as an address. The local filename is not
+    # predictable (hp-channels, claude-ai, etc.), so the pseudo-domain itself
+    # is the reliable signal.
+    if re.fullmatch(
+        r"(?:1x|2x|3x|4x)\.(?:mp|mp4|webm|mov|m4v|png|jpe?g|gif|svg|webp)",
+        email_domain,
     ):
         return True
 
@@ -8930,6 +9033,18 @@ async def process_single_url(
 
         for phone in raw_phone_candidates:
 
+            # tel: attributes and contact widgets can contain dates/tracking
+            # IDs. If locale is still unknown/global, do not promote a bare
+            # short numeric run to a prospect phone. Known local markets keep
+            # their legitimate national formats.
+            if (
+                not country_hint
+                and looks_like_low_confidence_phone_candidate(
+                    str(phone or "")
+                )
+            ):
+                continue
+
             normalized = normalize_phone_for_country(
                 phone,
                 country_hint,
@@ -10153,7 +10268,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.2",
+        "version": "6.6.3",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),

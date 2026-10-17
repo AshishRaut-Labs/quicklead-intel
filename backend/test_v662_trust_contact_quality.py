@@ -115,8 +115,8 @@ class QuickLeadV662TrustContactQualityTests(unittest.TestCase):
         ]:
             self.assertFalse(main.looks_like_low_confidence_phone_candidate(value), value)
 
-    def test_backend_version_is_v662(self):
-        self.assertEqual(main.app.version, "6.6.2")
+    def test_backend_version_is_v662_or_later_patch(self):
+        self.assertRegex(main.app.version, r"^6\.6\.[2-9]\d*$")
 
 
 if __name__ == "__main__":
