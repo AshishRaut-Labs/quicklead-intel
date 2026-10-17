@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Release: **v6.6.3 Identity Guardrails**
+- Release: **v6.6.4 Publisher Trust Guardrails**
 - Core backend: `backend/main.py`
 - Frontend: `app/page.tsx`
 - Bulk limit: 50 unique URLs
@@ -47,7 +47,7 @@ npm run build
 Expected backend release:
 
 ```text
-6.6.3
+6.6.4
 ```
 
 Then verify the deployed health endpoint and run a controlled 50-site batch.
@@ -136,8 +136,16 @@ For a paid private deployment, do not rely on obscurity. Put the deployment behi
 - Penalize isolated single-word names that do not align with the domain when a stronger primary identity exists.
 - Reject retina/media pseudo-email domains such as `@2x.webm`, `@2x.mp`, and related asset extensions.
 - Reject short date/ID-like numeric `tel:` noise when locale evidence is absent while preserving explicit international and known-local phone formats.
-- Regression suite: **51 tests** across v6.5 through v6.6.3.
+- Regression suite: **58 tests** across v6.5 through v6.6.4.
 
 ## Engineering freeze gate
 
-After v6.6.3 is deployed, run the same 50-site acceptance batch once. If the known identity/contact regressions are gone and no new severe regression appears, freeze engineering and move to the buyer demo and sales workflow. Do not add features before sales.
+After v6.6.4 is deployed, first verify Zoom, Wipro, Mailchimp, Booking.com, Meck Noonan, Tanya Stokes and Walker Glantz. Then run the same 50-site acceptance batch once. If no severe trust regression appears, freeze engineering and move to the buyer demo and sales workflow. Do not add features before sales.
+
+
+## v6.6.4 publisher-trust notes
+
+- Publisher identity now requires domain-aligned title/site metadata/header/logo evidence.
+- Body headings and customer/case-study names cannot outrank the publisher merely because they are prominent.
+- Bare short numeric `tel:` values are filtered as likely dates/IDs/placeholders.
+- Release remains a surgical trust patch: no scoring, UI, architecture, or performance tuning changes.

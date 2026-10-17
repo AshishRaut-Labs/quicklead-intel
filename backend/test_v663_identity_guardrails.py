@@ -211,8 +211,8 @@ class QuickLeadV663IdentityGuardrailsTests(unittest.TestCase):
         self.assertEqual(result[0], "Meck Noonan & Co., LLC")
         self.assertEqual(result[1], "repeated_visible_identity")
 
-    def test_backend_version_is_v663(self):
-        self.assertEqual(main.app.version, "6.6.3")
+    def test_backend_version_is_v663_or_later_patch(self):
+        self.assertRegex(main.app.version, r"^6\.6\.(?:[3-9]|[1-9]\d+)$")
 
 
 if __name__ == "__main__":

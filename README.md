@@ -2,7 +2,7 @@
 
 QuickLead Intel is an internal prospect-intelligence system for web, SEO and digital agencies. It turns a list of business websites into a ranked prospecting queue with identity, contactability, website/conversion signals, sales opportunity, recommended service, localized project value and outreach context.
 
-**Current release:** v6.6.3 — Identity Guardrails
+**Current release:** v6.6.4 — Publisher Trust Guardrails
 
 ## What it does
 
@@ -157,3 +157,12 @@ For a private commercial deployment, add deployment-level access control (for ex
 ## Release discipline
 
 `backend/main.py` is the core engine. Make targeted, regression-tested changes only. Do not rewrite it wholesale.
+
+
+## v6.6.4 publisher trust guardrails
+
+- Adds a final domain-aligned publisher guard so customer/case-study brands cannot replace the site owner.
+- Separates publisher evidence (title/site metadata/header/logo) from ordinary H1/H2 content.
+- Preserves canonical publisher spelling such as `Booking.com` when available.
+- Rejects bare short numeric `tel:` IDs/dates before they enter the phone list.
+- No scoring, UI, concurrency, or architecture changes.

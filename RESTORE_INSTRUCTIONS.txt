@@ -1,10 +1,10 @@
-QuickLead Intel v6.6.3 FULL RESTORE
+QuickLead Intel v6.6.4 FULL RESTORE
 
-This package contains the complete v6.6.3 Identity Guardrails source.
+This package contains the complete v6.6.4 Publisher Trust Guardrails source.
 
 Important:
 - .env.local is intentionally NOT included. Copy/recreate your environment file separately if you use one.
-- package-lock.json is intentionally NOT included. Run `npm install` once; npm will generate/update the lock for the pinned Next 16.4.0 dependency set and package version 6.6.3.
+- package-lock.json is intentionally NOT included. Run `npm install` once; npm will generate/update the lock for the pinned Next 16.4.0 dependency set and package version 6.6.4.
 - .git is intentionally NOT included. If your existing C:\Users\ASUS\intel-dashboard\.git folder exists, copy these source files into that repo and keep the existing .git folder.
 
 Restore/test commands in VS Code PowerShell:
@@ -12,11 +12,11 @@ Restore/test commands in VS Code PowerShell:
   npm run build
   npm audit --omit=dev
   python -m pip install -r backend/requirements.txt
-  python -m pytest backend/test_v65_regressions.py backend/test_v656_identity_regressions.py backend/test_v660_buyer_ready.py backend/test_v661_final_polish.py backend/test_v662_trust_contact_quality.py backend/test_v663_identity_guardrails.py -q
+  python -m pytest backend/test_v65_regressions.py backend/test_v656_identity_regressions.py backend/test_v660_buyer_ready.py backend/test_v661_final_polish.py backend/test_v662_trust_contact_quality.py backend/test_v663_identity_guardrails.py backend/test_v664_publisher_trust_guardrails.py -q
   python -c "from backend import main; print(main.app.version)"
 
 Expected:
   build succeeds
   production audit: 0 vulnerabilities
-  51 tests pass
-  backend version: 6.6.3
+  58 tests pass
+  backend version: 6.6.4

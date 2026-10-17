@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.3 - Identity Guardrails
+# QuickLead Intel V6.6.4 - Publisher Trust Guardrails
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.3",
+    version="6.6.4",
 )
 
 cors_origins = [
@@ -2939,6 +2939,247 @@ def business_identity_has_primary_brand_evidence(
     return False
 
 
+
+def business_identity_has_publisher_evidence(
+    soup: BeautifulSoup,
+    business_name: str,
+) -> bool:
+    """Return True only for publisher-level brand evidence.
+
+    Body H1/H2 copy is intentionally excluded. Customer stories, case studies,
+    campaign headings and article titles can contain real company names that do
+    not own the scanned domain. Publisher evidence is limited to the document
+    title/site metadata and header/navigation/logo regions.
+    """
+
+    needle = clean_business_name_candidate(business_name).casefold()
+
+    if not needle:
+        return False
+
+    def contains_identity(value: str) -> bool:
+        cleaned = clean_business_name_candidate(value).casefold()
+        return bool(
+            cleaned
+            and (
+                needle == cleaned
+                or needle in cleaned
+                or cleaned in needle
+            )
+        )
+
+    if soup.title and contains_identity(soup.title.get_text(" ", strip=True)):
+        return True
+
+    for property_name in [
+        "og:site_name",
+        "application-name",
+    ]:
+        tag = (
+            soup.find("meta", attrs={"property": property_name})
+            or soup.find("meta", attrs={"name": property_name})
+        )
+        if tag and contains_identity(str(tag.get("content") or "")):
+            return True
+
+    for element in soup.select(
+        "header, nav, "
+        "header [class*='logo'], header [class*='brand'], "
+        "nav [class*='logo'], nav [class*='brand'], "
+        "[class*='site-logo'], [class*='brand-name']"
+    ):
+        if looks_like_agency_credit_element(element):
+            continue
+
+        if contains_identity(element.get_text(" ", strip=True)):
+            return True
+
+        for image in element.find_all("img"):
+            for attribute_name in ["alt", "title", "aria-label"]:
+                if contains_identity(str(image.get(attribute_name) or "")):
+                    return True
+
+    return False
+
+
+def extract_domain_aligned_publisher_identity_candidate(
+    soup: BeautifulSoup,
+    inferred_domain_name: str,
+) -> tuple[str, str, int]:
+    """Recover the site owner from publisher-level brand signals.
+
+    This is deliberately conservative and domain-aligned. It is used as a
+    final guard against customer/case-study names or campaign headings taking
+    over the prospect identity on content-heavy sites.
+    """
+
+    if not inferred_domain_name:
+        return ("", "unknown", 0)
+
+    candidates: list[tuple[str, str, int]] = []
+
+    def add_candidate(value: str, source: str, confidence: int) -> None:
+        cleaned = clean_business_name_candidate(value).rstrip(" .,:;-")
+        if (
+            not cleaned
+            or looks_generic_business_name(cleaned)
+            or looks_like_non_brand_phrase(cleaned)
+            or not strong_business_identity_matches_domain(
+                cleaned,
+                inferred_domain_name,
+            )
+        ):
+            return
+        candidates.append((cleaned, source, confidence))
+
+    for property_name, confidence in [
+        ("og:site_name", 96),
+        ("application-name", 95),
+    ]:
+        tag = (
+            soup.find("meta", attrs={"property": property_name})
+            or soup.find("meta", attrs={"name": property_name})
+        )
+        if tag:
+            add_candidate(
+                str(tag.get("content") or ""),
+                "publisher_meta_identity",
+                confidence,
+            )
+
+    if soup.title:
+        page_title = clean_text(soup.title.get_text(" ", strip=True))
+        title_parts = [page_title]
+        for separator in [" | ", " - ", " — ", " – ", " :: ", ": "]:
+            if separator in page_title:
+                title_parts.extend(
+                    clean_text(part)
+                    for part in page_title.split(separator)
+                    if clean_text(part)
+                )
+        for part in title_parts:
+            if len(part) <= 100:
+                add_candidate(part, "publisher_title_identity", 94)
+
+    for element in soup.select(
+        "header [class*='logo'], header [class*='brand'], "
+        "nav [class*='logo'], nav [class*='brand'], "
+        "[class*='site-logo'], [class*='brand-name']"
+    ):
+        if looks_like_agency_credit_element(element):
+            continue
+        add_candidate(
+            element.get_text(" ", strip=True),
+            "publisher_logo_identity",
+            94,
+        )
+        for image in element.find_all("img"):
+            for attribute_name in ["alt", "title", "aria-label"]:
+                add_candidate(
+                    str(image.get(attribute_name) or ""),
+                    "publisher_logo_identity",
+                    94,
+                )
+
+    # If the compact domain identity itself is visibly present in publisher
+    # locations, it is safer than an unrelated customer/story/content entity.
+    if business_identity_has_publisher_evidence(soup, inferred_domain_name):
+        add_candidate(
+            inferred_domain_name,
+            "publisher_domain_identity",
+            92,
+        )
+
+    if not candidates:
+        return ("", "unknown", 0)
+
+    candidates.sort(
+        key=lambda item: (
+            item[2],
+            item[0].casefold().endswith(".com"),
+            name_quality(item[0]),
+            -len(item[0]),
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
+def business_name_has_legal_or_professional_suffix(
+    business_name: str,
+) -> bool:
+    cleaned = clean_business_name_candidate(business_name)
+    return bool(
+        re.search(
+            r"\b(?:LLC|PLLC|LLP|Inc\.?|Corp\.?|Corporation|Ltd\.?|"
+            r"Limited|Company|Co\.?|P\.?C\.?|CPA|CPAs|DDS|DMD)\b",
+            cleaned,
+            re.I,
+        )
+    )
+
+
+def apply_publisher_identity_guard(
+    soup: BeautifulSoup,
+    business_name: str,
+    business_name_source: str,
+    business_name_confidence: int,
+    inferred_domain_name: str,
+    domain_name_is_valid: bool,
+) -> tuple[str, str, int]:
+    """Prefer domain-aligned publisher identity over unrelated page entities.
+
+    This guard runs after the normal resolver. It intentionally does not replace
+    legal/professional identities and it does not override a brand that already
+    has publisher-level evidence of its own.
+    """
+
+    if not domain_name_is_valid:
+        return business_name, business_name_source, business_name_confidence
+
+    publisher_name, publisher_source, publisher_confidence = (
+        extract_domain_aligned_publisher_identity_candidate(
+            soup,
+            inferred_domain_name,
+        )
+    )
+
+    if not publisher_name:
+        return business_name, business_name_source, business_name_confidence
+
+    if business_names_equivalent(business_name, publisher_name):
+        # Preserve canonical publisher spelling such as Booking.com when the
+        # current identity is only the bare equivalent "Booking".
+        if (
+            publisher_name.casefold().endswith(".com")
+            and not clean_text(business_name).casefold().endswith(".com")
+        ):
+            return (
+                publisher_name,
+                publisher_source,
+                max(business_name_confidence, publisher_confidence),
+            )
+        return business_name, business_name_source, business_name_confidence
+
+    if strong_business_identity_matches_domain(
+        business_name,
+        inferred_domain_name,
+    ):
+        return business_name, business_name_source, business_name_confidence
+
+    if business_identity_has_publisher_evidence(soup, business_name):
+        return business_name, business_name_source, business_name_confidence
+
+    if business_name_has_legal_or_professional_suffix(business_name):
+        return business_name, business_name_source, business_name_confidence
+
+    return (
+        publisher_name,
+        publisher_source,
+        max(92, publisher_confidence),
+    )
+
+
 def resolve_business_identity_conflict(
     soup: BeautifulSoup,
     business_name: str,
@@ -4832,6 +5073,14 @@ def extract_phone_numbers(
             raw = urllib.parse.unquote(
                 href[4:]
             ).strip()
+
+            # A tel: attribute is strong contact evidence, but modern sites
+            # sometimes place analytics IDs/dates in malformed tel links.
+            # Reject bare 7-9 digit values and known placeholders before they
+            # can enter the contact list; formatted or international numbers
+            # continue through normal validation.
+            if looks_like_low_confidence_phone_candidate(raw):
+                continue
 
             normalized = normalize_phone_for_country(
                 raw,
@@ -8933,6 +9182,19 @@ async def process_single_url(
             email_identity_is_valid,
         )
 
+        (
+            business_name,
+            business_name_source,
+            business_name_confidence,
+        ) = apply_publisher_identity_guard(
+            soup,
+            business_name,
+            business_name_source,
+            business_name_confidence,
+            inferred_domain_name,
+            domain_name_is_valid,
+        )
+
         # -------------------------------------------------
         # Locale first pass
         # -------------------------------------------------
@@ -10268,7 +10530,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.3",
+        "version": "6.6.4",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
