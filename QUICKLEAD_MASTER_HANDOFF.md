@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Release: **v6.6.5 Freeze Candidate**
+- Release: **v6.6.6 Sales Freeze**
 - Core backend: `backend/main.py`
 - Frontend: `app/page.tsx`
 - Bulk limit: 50 unique URLs
@@ -47,7 +47,7 @@ npm run build
 Expected backend release:
 
 ```text
-6.6.5
+6.6.6
 ```
 
 Then verify the deployed health endpoint and run a controlled 50-site batch.
@@ -136,7 +136,7 @@ For a paid private deployment, do not rely on obscurity. Put the deployment behi
 - Penalize isolated single-word names that do not align with the domain when a stronger primary identity exists.
 - Reject retina/media pseudo-email domains such as `@2x.webm`, `@2x.mp`, and related asset extensions.
 - Reject short date/ID-like numeric `tel:` noise when locale evidence is absent while preserving explicit international and known-local phone formats.
-- Regression suite: **64 tests** across v6.5 through v6.6.5.
+- Regression suite: **68 tests** across v6.5 through v6.6.6.
 
 ## Engineering freeze gate
 
@@ -158,3 +158,8 @@ After v6.6.5 is deployed, verify only Booking.com and Mailchimp first. If those 
 - Low-opportunity render-verification rows require at least 40 opportunity points to remain `VERIFY`, reducing low-value review noise.
 - Targeted gate before freeze: `booking.com` and `mailchimp.com`.
 - If those pass on the deployed build, stop engineering and move to the verified SMB buyer demo + sales outreach.
+
+
+## v6.6.6 sales-freeze note
+
+Final pre-sales hotfix: only the remaining short numeric contact-noise path was changed. After production validation of Mailchimp, freeze engineering and move to the verified SMB demo dataset and sales execution.

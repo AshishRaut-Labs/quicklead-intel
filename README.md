@@ -2,7 +2,7 @@
 
 QuickLead Intel is an internal prospect-intelligence system for web, SEO and digital agencies. It turns a list of business websites into a ranked prospecting queue with identity, contactability, website/conversion signals, sales opportunity, recommended service, localized project value and outreach context.
 
-**Current release:** v6.6.5 — Freeze Candidate
+**Current release:** v6.6.6 — Sales Freeze
 
 ## What it does
 
@@ -180,3 +180,8 @@ For a private commercial deployment, add deployment-level access control (for ex
 - Prevents bare 7–9 digit `tel:` values from being reintroduced during country-aware phone normalization after they were already rejected as ambiguous date/ID noise.
 - Raises the generic rendered-verification `VERIFY` threshold from 35 to 40 opportunity points, so low-opportunity/no-email rows do not become review work solely because identity confidence is high.
 - No UI, architecture, concurrency, pricing, or scoring-model redesign. This is the sales freeze candidate.
+
+
+## v6.6.6 sales freeze
+
+Final contact-sanitation hotfix. Ambiguous 7–9 digit values are rejected on Unknown/US/CA/IN locale paths even when punctuation let them bypass early extraction. This closes the Mailchimp-style date/ID leak without globally disabling legitimate short national numbers. No scoring, UI, architecture or identity changes.

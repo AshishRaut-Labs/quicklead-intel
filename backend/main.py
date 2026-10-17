@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.5 - Freeze Candidate
+# QuickLead Intel V6.6.6 - Sales Freeze
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.5",
+    version="6.6.6",
 )
 
 cors_origins = [
@@ -5081,6 +5081,31 @@ def looks_like_low_confidence_phone_candidate(
     return False
 
 
+def reject_ambiguous_short_phone_for_locale(
+    candidate: str,
+    country_hint: Optional[str],
+) -> bool:
+    """Reject short phone-like noise when locale makes it implausible.
+
+    Some countries legitimately use 8-digit national numbers, so the generic
+    extractor cannot discard every short candidate. Once locale evidence is
+    available, however, 7-9 digit local-looking values are not plausible
+    prospect phones for US/CA/IN. Unknown/global pages also abstain rather than
+    exporting ambiguous IDs or dates.
+    """
+
+    value = clean_text(candidate)
+    digits = re.sub(r"\D", "", value)
+
+    if not (7 <= len(digits) <= 9):
+        return False
+
+    if value.startswith("+") or value.startswith("00"):
+        return False
+
+    return country_hint in {None, "US", "CA", "IN"}
+
+
 def extract_phone_numbers(
     soup: BeautifulSoup,
     html_content: str = "",
@@ -9371,14 +9396,15 @@ async def process_single_url(
                     href[4:]
                 ).strip()
 
-                # Precision-first freeze policy: bare 7-9 digit tel values are
-                # too ambiguous for a prospecting export. They are frequently
-                # dates, counters or tracking IDs; real national numbers remain
-                # discoverable when the page presents formatting or an explicit
-                # international prefix. Do not re-add values already rejected by
-                # extract_phone_numbers() merely because a country hint exists.
-                if looks_like_low_confidence_phone_candidate(
-                    raw_tel_candidate
+                # Do not re-add malformed short tel values just because locale
+                # evidence exists. A formatted date/ID such as 20-01-2026 can
+                # bypass the earlier digit-only noise check.
+                if (
+                    looks_like_low_confidence_phone_candidate(raw_tel_candidate)
+                    or reject_ambiguous_short_phone_for_locale(
+                        raw_tel_candidate,
+                        country_hint,
+                    )
                 ):
                     continue
 
@@ -9390,14 +9416,15 @@ async def process_single_url(
 
         for phone in raw_phone_candidates:
 
-            # tel: attributes and contact widgets can contain dates/tracking
-            # IDs. If locale is still unknown/global, do not promote a bare
-            # short numeric run to a prospect phone. Known local markets keep
-            # their legitimate national formats.
+            # Contact regions can contain dates/tracking IDs with punctuation.
+            # Earlier extraction may normalize them to plain digits while a
+            # preliminary US locale still exists. Apply the locale-aware guard
+            # before country normalization so they cannot reach the export.
             if (
-                not country_hint
-                and looks_like_low_confidence_phone_candidate(
-                    str(phone or "")
+                looks_like_low_confidence_phone_candidate(str(phone or ""))
+                or reject_ambiguous_short_phone_for_locale(
+                    str(phone or ""),
+                    country_hint,
                 )
             ):
                 continue
@@ -10625,7 +10652,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.5",
+        "version": "6.6.6",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),

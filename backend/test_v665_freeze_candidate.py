@@ -139,8 +139,8 @@ class QuickLeadV665FreezeCandidateTests(unittest.TestCase):
         ):
             self.assertEqual(intelligence["prospect_decision"], "SKIP")
 
-    def test_backend_version_is_v665(self):
-        self.assertEqual(main.app.version, "6.6.5")
+    def test_backend_version_is_v665_or_later_patch(self):
+        self.assertRegex(main.app.version, r"^6\.6\.(?:[5-9]|[1-9]\d+)$")
 
 
 if __name__ == "__main__":
