@@ -2,7 +2,7 @@
 
 QuickLead Intel is an internal prospect-intelligence system for web, SEO and digital agencies. It turns a list of business websites into a ranked prospecting queue with identity, contactability, website/conversion signals, sales opportunity, recommended service, localized project value and outreach context.
 
-**Current release:** v6.6.4 — Publisher Trust Guardrails
+**Current release:** v6.6.5 — Freeze Candidate
 
 ## What it does
 
@@ -35,6 +35,8 @@ backend/test_v660_buyer_ready.py
 backend/test_v661_final_polish.py
 backend/test_v662_trust_contact_quality.py
 backend/test_v663_identity_guardrails.py
+backend/test_v664_publisher_trust_guardrails.py
+backend/test_v665_freeze_candidate.py
 V64_CHANGES.md
 V65_CHANGES.md
 V656_CHANGES.md
@@ -42,6 +44,8 @@ V660_CHANGES.md
 V661_CHANGES.md
 V662_CHANGES.md
 V663_CHANGES.md
+V664_CHANGES.md
+V665_CHANGES.md
 QUICKLEAD_MASTER_HANDOFF.md
 ```
 
@@ -78,6 +82,8 @@ python -m pytest \
   backend/test_v661_final_polish.py \
   backend/test_v662_trust_contact_quality.py \
   backend/test_v663_identity_guardrails.py \
+  backend/test_v664_publisher_trust_guardrails.py \
+  backend/test_v665_freeze_candidate.py \
   -q
 ```
 
@@ -166,3 +172,11 @@ For a private commercial deployment, add deployment-level access control (for ex
 - Preserves canonical publisher spelling such as `Booking.com` when available.
 - Rejects bare short numeric `tel:` IDs/dates before they enter the phone list.
 - No scoring, UI, concurrency, or architecture changes.
+
+
+## v6.6.5 freeze candidate
+
+- Restores canonical `.com` brand spelling only when the page itself gives strong title/site/corporate evidence; this fixes `Booking` → `Booking.com` without globally appending `.com` to ordinary brands.
+- Prevents bare 7–9 digit `tel:` values from being reintroduced during country-aware phone normalization after they were already rejected as ambiguous date/ID noise.
+- Raises the generic rendered-verification `VERIFY` threshold from 35 to 40 opportunity points, so low-opportunity/no-email rows do not become review work solely because identity confidence is high.
+- No UI, architecture, concurrency, pricing, or scoring-model redesign. This is the sales freeze candidate.

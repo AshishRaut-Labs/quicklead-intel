@@ -126,8 +126,8 @@ class QuickLeadV664PublisherTrustGuardrailsTests(unittest.TestCase):
             main.business_identity_has_publisher_evidence(soup, "Zoom")
         )
 
-    def test_backend_version_is_v664(self):
-        self.assertEqual(main.app.version, "6.6.4")
+    def test_backend_version_is_v664_or_later_patch(self):
+        self.assertRegex(main.app.version, r"^6\.6\.(?:[4-9]|[1-9]\d+)$")
 
 
 if __name__ == "__main__":

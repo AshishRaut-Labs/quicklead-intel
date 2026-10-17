@@ -2,7 +2,7 @@
 
 ## Current state
 
-- Release: **v6.6.4 Publisher Trust Guardrails**
+- Release: **v6.6.5 Freeze Candidate**
 - Core backend: `backend/main.py`
 - Frontend: `app/page.tsx`
 - Bulk limit: 50 unique URLs
@@ -38,7 +38,7 @@ Before a sales demo or deployment:
 
 ```text
 python -m py_compile backend/main.py
-python -m pytest backend/test_v65_regressions.py backend/test_v656_identity_regressions.py backend/test_v660_buyer_ready.py backend/test_v661_final_polish.py backend/test_v662_trust_contact_quality.py backend/test_v663_identity_guardrails.py -q
+python -m pytest backend/test_v65_regressions.py backend/test_v656_identity_regressions.py backend/test_v660_buyer_ready.py backend/test_v661_final_polish.py backend/test_v662_trust_contact_quality.py backend/test_v663_identity_guardrails.py backend/test_v664_publisher_trust_guardrails.py backend/test_v665_freeze_candidate.py -q
 npm install
 npm run lint
 npm run build
@@ -47,7 +47,7 @@ npm run build
 Expected backend release:
 
 ```text
-6.6.4
+6.6.5
 ```
 
 Then verify the deployed health endpoint and run a controlled 50-site batch.
@@ -136,11 +136,11 @@ For a paid private deployment, do not rely on obscurity. Put the deployment behi
 - Penalize isolated single-word names that do not align with the domain when a stronger primary identity exists.
 - Reject retina/media pseudo-email domains such as `@2x.webm`, `@2x.mp`, and related asset extensions.
 - Reject short date/ID-like numeric `tel:` noise when locale evidence is absent while preserving explicit international and known-local phone formats.
-- Regression suite: **58 tests** across v6.5 through v6.6.4.
+- Regression suite: **64 tests** across v6.5 through v6.6.5.
 
 ## Engineering freeze gate
 
-After v6.6.4 is deployed, first verify Zoom, Wipro, Mailchimp, Booking.com, Meck Noonan, Tanya Stokes and Walker Glantz. Then run the same 50-site acceptance batch once. If no severe trust regression appears, freeze engineering and move to the buyer demo and sales workflow. Do not add features before sales.
+After v6.6.5 is deployed, verify only Booking.com and Mailchimp first. If those two targeted cases pass, engineering freezes immediately and the next validation is a buyer-value SMB demo batch rather than another megabrand torture loop. Do not add features before sales.
 
 
 ## v6.6.4 publisher-trust notes
@@ -149,3 +149,12 @@ After v6.6.4 is deployed, first verify Zoom, Wipro, Mailchimp, Booking.com, Meck
 - Body headings and customer/case-study names cannot outrank the publisher merely because they are prominent.
 - Bare short numeric `tel:` values are filtered as likely dates/IDs/placeholders.
 - Release remains a surgical trust patch: no scoring, UI, architecture, or performance tuning changes.
+
+
+## v6.6.5 freeze-candidate notes
+
+- Canonical `.com` brand styling is restored only from strong page evidence and only when the existing brand already matches the scanned `.com` host.
+- Bare 7–9 digit `tel:` values are not re-added during country-aware normalization; this closes the Mailchimp date/ID leak found in the v6.6.4 targeted live test.
+- Low-opportunity render-verification rows require at least 40 opportunity points to remain `VERIFY`, reducing low-value review noise.
+- Targeted gate before freeze: `booking.com` and `mailchimp.com`.
+- If those pass on the deployed build, stop engineering and move to the verified SMB buyer demo + sales outreach.

@@ -1,4 +1,4 @@
-# QuickLead Intel V6.6.4 - Publisher Trust Guardrails
+# QuickLead Intel V6.6.5 - Freeze Candidate
 
 import asyncio
 import html as html_lib
@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="QuickLead Intel - Global Sales Intelligence Engine",
-    version="6.6.4",
+    version="6.6.5",
 )
 
 cors_origins = [
@@ -3104,6 +3104,75 @@ def extract_domain_aligned_publisher_identity_candidate(
     )
     return candidates[0]
 
+
+
+def extract_canonical_dotcom_brand_candidate(
+    soup: BeautifulSoup,
+    final_url: str,
+    business_name: str,
+) -> str:
+    """Return a canonical ``Brand.com`` spelling only with strong page evidence.
+
+    This is intentionally conservative. It never changes the underlying brand
+    identity: the current name must already match the site's .com host label.
+    The helper only restores the explicit ``.com`` styling when the document
+    presents that spelling as a brand in high-signal copy (title/site metadata,
+    an ``About Brand.com`` phrase, a ``Brand.com is ...`` statement, or a
+    copyright/trademark line). This avoids converting ordinary brands to
+    ``Brand.com`` merely because their website happens to use a .com domain.
+    """
+
+    host = get_domain(final_url)
+    if not host or not host.endswith(".com") or host.count(".") != 1:
+        return ""
+
+    host_label = host[:-4]
+    current = clean_business_name_candidate(business_name).strip()
+    if not current or current.casefold().endswith(".com"):
+        return ""
+
+    current_compact = re.sub(r"[^a-z0-9]+", "", current.casefold())
+    host_compact = re.sub(r"[^a-z0-9]+", "", host_label.casefold())
+    if not current_compact or current_compact != host_compact:
+        return ""
+
+    canonical = f"{current}.com"
+    canonical_re = re.escape(canonical)
+
+    prominent_values: list[str] = []
+    if soup.title:
+        prominent_values.append(soup.title.get_text(" ", strip=True))
+
+    for property_name in [
+        "og:site_name",
+        "application-name",
+        "twitter:title",
+    ]:
+        tag = (
+            soup.find("meta", attrs={"property": property_name})
+            or soup.find("meta", attrs={"name": property_name})
+        )
+        if tag:
+            prominent_values.append(str(tag.get("content") or ""))
+
+    if any(
+        re.search(rf"(?<![A-Za-z0-9]){canonical_re}(?![A-Za-z0-9])", value, re.I)
+        for value in prominent_values
+    ):
+        return canonical
+
+    visible_text = clean_text(soup.get_text(" ", strip=True))
+    strong_patterns = [
+        rf"\bAbout\s+{canonical_re}\b",
+        rf"\b{canonical_re}\s+is\b",
+        rf"(?:Copyright|©)[^\n]{{0,80}}\b{canonical_re}\b",
+        rf"\b{canonical_re}(?:™|®)\b",
+    ]
+
+    if any(re.search(pattern, visible_text, re.I) for pattern in strong_patterns):
+        return canonical
+
+    return ""
 
 def business_name_has_legal_or_professional_suffix(
     business_name: str,
@@ -8043,7 +8112,7 @@ def generate_sales_intel(
         contactability.get(
             "verification_required"
         )
-        and opportunity_score >= 35
+        and opportunity_score >= 40
         and business_name_confidence >= 60
     ):
         prospect_decision = "VERIFY"
@@ -9195,6 +9264,19 @@ async def process_single_url(
             domain_name_is_valid,
         )
 
+        canonical_dotcom_name = extract_canonical_dotcom_brand_candidate(
+            soup,
+            final_url,
+            business_name,
+        )
+        if canonical_dotcom_name:
+            business_name = canonical_dotcom_name
+            business_name_source = "canonical_dotcom_brand"
+            business_name_confidence = max(
+                business_name_confidence,
+                94,
+            )
+
         # -------------------------------------------------
         # Locale first pass
         # -------------------------------------------------
@@ -9285,10 +9367,23 @@ async def process_single_url(
                 "tel:"
             ):
 
+                raw_tel_candidate = urllib.parse.unquote(
+                    href[4:]
+                ).strip()
+
+                # Precision-first freeze policy: bare 7-9 digit tel values are
+                # too ambiguous for a prospecting export. They are frequently
+                # dates, counters or tracking IDs; real national numbers remain
+                # discoverable when the page presents formatting or an explicit
+                # international prefix. Do not re-add values already rejected by
+                # extract_phone_numbers() merely because a country hint exists.
+                if looks_like_low_confidence_phone_candidate(
+                    raw_tel_candidate
+                ):
+                    continue
+
                 raw_phone_candidates.append(
-                    urllib.parse.unquote(
-                        href[4:]
-                    ).strip()
+                    raw_tel_candidate
                 )
 
         seen_normalized = set()
@@ -10530,7 +10625,7 @@ async def root():
     return {
         "status": "online",
         "service": "QuickLead Intel",
-        "version": "6.6.4",
+        "version": "6.6.5",
         "message": (
             "Global Sales Intelligence + Data Quality Engine"
         ),
